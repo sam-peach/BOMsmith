@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo '{\"systemMessage\": \"Docs check: did any changes this session affect architecture, API endpoints, data models, auth, storage, deployment, the analysis pipeline, environment variables, or frontend components? If yes, update README.md and/or docs/walkthrough.md per the table in CLAUDE.md §7 before finishing. Skip if changes were purely internal (refactor, test, bug fix with no visible behaviour change).\"}'",
+            "statusMessage": "Checking if docs need updating..."
+          }
+        ]
+      }
+    ]
+  }
+}

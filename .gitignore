@@ -19,5 +19,5 @@ infra/terraform.tfstate
 infra/terraform.tfstate.backup
 infra/terraform.tfvars
 
-# Claude Code local config
-.claude/
+# Claude Code local config (machine-specific overrides only — settings.json is committed)
+.claude/settings.local.json

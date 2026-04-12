@@ -58,3 +58,23 @@ cd frontend && npx tsc --noEmit      # TypeScript check
 2. Run `go test ./...` — confirm it fails.
 3. Implement until the test passes.
 4. Update TypeScript types in `frontend/src/types/api.ts` if the API shape changed.
+5. Update `README.md` and `docs/walkthrough.md` if the change affects architecture, the API, data models, auth, storage, deployment, or the analysis pipeline.
+
+## 7. Keeping docs up to date
+
+`README.md` and `docs/walkthrough.md` are the canonical references for this project. After completing any task, check whether the work affects any of the following areas and update the relevant section if so:
+
+| Changed area | Sections to update |
+|---|---|
+| New or removed API endpoint | README layout table · walkthrough §8 HTTP API reference |
+| New data field or struct | walkthrough §6 Data models |
+| Auth changes | walkthrough §3 Authentication |
+| Analysis pipeline changes | walkthrough §5 Analysis pipeline |
+| New flag type | walkthrough §5 · §12 Adding a new flag type |
+| Mapping system changes | walkthrough §7 Mapping system |
+| New environment variable | README env table · walkthrough §12 env var reference |
+| Infra / deployment changes | README Deployment · walkthrough §11 Deployment architecture |
+| New frontend component | walkthrough §9 Frontend architecture |
+| Project layout changes | README layout · CLAUDE.md §3 · walkthrough §2 |
+
+If a change is purely internal (refactor, test, bug fix with no visible behaviour change) and no public-facing contract changed, doc updates are not required.
