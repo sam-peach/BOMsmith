@@ -48,10 +48,26 @@ type BOMRow struct {
 	Flags                  []string `json:"flags"`
 }
 
+type Organization struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"createdAt"`
+}
+
+type User struct {
+	ID             string    `json:"id"`
+	OrganizationID string    `json:"organizationId"`
+	Username       string    `json:"username"`
+	PasswordHash   string    `json:"-"` // never serialised
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+}
+
 // Mapping records a known cross-reference between a customer part number and
 // the internal/manufacturer identifiers used in-house.
 type Mapping struct {
 	ID                     string    `json:"id"`
+	OrganizationID         string    `json:"-"` // server-side only
 	CustomerPartNumber     string    `json:"customerPartNumber"`
 	InternalPartNumber     string    `json:"internalPartNumber"`
 	ManufacturerPartNumber string    `json:"manufacturerPartNumber"`

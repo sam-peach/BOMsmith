@@ -4,7 +4,7 @@ import "encoding/json"
 
 // mockAnalysis returns a realistic cable assembly BOM for development and testing.
 // It exercises every flag type so the UI can be verified without a real drawing.
-func mockAnalysis(ms *mappingStore) AnalysisResult {
+func mockAnalysis(ms mappingReader) AnalysisResult {
 	rows := []llmRow{
 		{
 			// Clean row — no issues.

@@ -22,7 +22,7 @@ var anthropicClient = &http.Client{Timeout: 5 * time.Minute}
 
 // analyzeDocument is the pipeline entry point.
 // When apiKey is empty it returns mock data for development/testing.
-func analyzeDocument(doc *Document, apiKey string, ms *mappingStore) (AnalysisResult, error) {
+func analyzeDocument(doc *Document, apiKey string, ms mappingReader) (AnalysisResult, error) {
 	if apiKey == "" {
 		return mockAnalysis(ms), nil
 	}
@@ -43,7 +43,7 @@ func analyzeDocument(doc *Document, apiKey string, ms *mappingStore) (AnalysisRe
 
 // interpretText sends the extracted drawing text to the Anthropic API,
 // parses the response, then post-processes each row.
-func interpretText(text, apiKey string, ms *mappingStore) (AnalysisResult, error) {
+func interpretText(text, apiKey string, ms mappingReader) (AnalysisResult, error) {
 	raw, err := callAnthropic(text, apiKey)
 	if err != nil {
 		return AnalysisResult{}, fmt.Errorf("Anthropic API: %w", err)
@@ -183,7 +183,7 @@ type llmRow struct {
 }
 
 // parseBOMRows converts the raw LLM text into BOMRows and runs post-processing.
-func parseBOMRows(text string, ms *mappingStore) ([]BOMRow, []string, error) {
+func parseBOMRows(text string, ms mappingReader) ([]BOMRow, []string, error) {
 	text = strings.TrimSpace(text)
 
 	// Strip markdown fences.
@@ -369,7 +369,7 @@ func enrichFromSupplierRef(row *BOMRow) {
 
 // applyMapping checks for a known mapping and fills in InternalPartNumber /
 // ManufacturerPartNumber from the stored record.
-func applyMapping(row *BOMRow, ms *mappingStore) {
+func applyMapping(row *BOMRow, ms mappingReader) {
 	if ms == nil || row.CustomerPartNumber == "" {
 		return
 	}

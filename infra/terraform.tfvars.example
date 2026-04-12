@@ -1,3 +1,6 @@
 anthropic_api_key = "sk-ant-..."
 auth_username     = "admin"
 auth_password     = "change-me"
+org_name          = "Acme Corp"
+db_username       = "praxis"
+db_password       = "change-me-db"

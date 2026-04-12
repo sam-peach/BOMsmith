@@ -18,38 +18,76 @@ func main() {
 		log.Println("ANTHROPIC_API_KEY not set — analysis will use mock data")
 	}
 
-	authUsername := os.Getenv("AUTH_USERNAME")
-	authPassword := os.Getenv("AUTH_PASSWORD")
-	if authUsername == "" || authPassword == "" {
-		log.Fatal("AUTH_USERNAME and AUTH_PASSWORD must be set")
-	}
-
 	uploadDir := "./uploads"
 	if err := os.MkdirAll(uploadDir, 0755); err != nil {
 		log.Fatalf("failed to create upload directory: %v", err)
 	}
 
-	dataDir := os.Getenv("DATA_DIR")
-	if dataDir == "" {
-		dataDir = "./data"
-	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		log.Fatalf("failed to create data directory: %v", err)
-	}
+	var (
+		mappings mappingRepository
+		userRepo userRepository
+	)
 
-	ms, err := newMappingStore(filepath.Join(dataDir, "mappings.json"))
-	if err != nil {
-		log.Fatalf("mapping store: %v", err)
+	dbURL := os.Getenv("DATABASE_URL")
+	if dbURL != "" {
+		db, err := openDB(dbURL)
+		if err != nil {
+			log.Fatalf("database: %v", err)
+		}
+		if err := runMigrations(db); err != nil {
+			log.Fatalf("migrations: %v", err)
+		}
+
+		orgName := os.Getenv("ORG_NAME")
+		adminUsername := os.Getenv("AUTH_USERNAME")
+		adminPassword := os.Getenv("AUTH_PASSWORD")
+		if adminUsername == "" || adminPassword == "" {
+			log.Fatal("AUTH_USERNAME and AUTH_PASSWORD must be set")
+		}
+		if err := seedAdmin(db, orgName, adminUsername, adminPassword); err != nil {
+			log.Fatalf("seed admin: %v", err)
+		}
+
+		mappings = &pgMappingRepository{db: db}
+		userRepo = &pgUserRepository{db: db}
+		log.Println("using Postgres storage")
+	} else {
+		// Dev/test mode: in-memory stores backed by optional JSON file.
+		authUsername := os.Getenv("AUTH_USERNAME")
+		authPassword := os.Getenv("AUTH_PASSWORD")
+		if authUsername == "" || authPassword == "" {
+			log.Fatal("AUTH_USERNAME and AUTH_PASSWORD must be set")
+		}
+
+		dataDir := os.Getenv("DATA_DIR")
+		if dataDir == "" {
+			dataDir = "./data"
+		}
+		if err := os.MkdirAll(dataDir, 0755); err != nil {
+			log.Fatalf("failed to create data directory: %v", err)
+		}
+
+		ms, err := newMappingStore(filepath.Join(dataDir, "mappings.json"))
+		if err != nil {
+			log.Fatalf("mapping store: %v", err)
+		}
+		mappings = &inMemoryMappingRepository{store: ms}
+
+		ur, err := newEnvUserRepository(authUsername, authPassword)
+		if err != nil {
+			log.Fatalf("user repository: %v", err)
+		}
+		userRepo = ur
+		log.Println("DATABASE_URL not set — using in-memory storage")
 	}
 
 	srv := &server{
-		store:        newStore(),
-		mappings:     ms,
-		sessions:     newSessionStore(24 * time.Hour),
-		uploadDir:    uploadDir,
-		apiKey:       apiKey,
-		authUsername: authUsername,
-		authPassword: authPassword,
+		store:     newStore(),
+		mappings:  mappings,
+		sessions:  newSessionStore(24 * time.Hour),
+		uploadDir: uploadDir,
+		apiKey:    apiKey,
+		userRepo:  userRepo,
 	}
 
 	staticDir := os.Getenv("STATIC_DIR")
@@ -76,6 +114,9 @@ func main() {
 	mux.HandleFunc("GET /api/mappings", srv.requireAuth(srv.listMappings))
 	mux.HandleFunc("POST /api/mappings/upload", srv.requireAuth(srv.uploadMappings)) // must be before /api/mappings
 	mux.HandleFunc("POST /api/mappings", srv.requireAuth(srv.saveMapping))
+	mux.HandleFunc("GET /api/users/me", srv.requireAuth(srv.getMe))
+	mux.HandleFunc("PUT /api/users/me/password", srv.requireAuth(srv.changePassword))
+	mux.HandleFunc("POST /api/users", srv.requireAuth(srv.createUser))
 
 	if _, err := os.Stat(staticDir); err == nil {
 		mux.Handle("/", http.FileServer(http.Dir(staticDir)))

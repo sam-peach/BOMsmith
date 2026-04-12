@@ -12,16 +12,17 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type server struct {
-	store        *documentStore
-	mappings     *mappingStore
-	sessions     *sessionStore
-	uploadDir    string
-	apiKey       string
-	authUsername string
-	authPassword string
+	store     *documentStore
+	mappings  mappingRepository
+	sessions  *sessionStore
+	uploadDir string
+	apiKey    string
+	userRepo  userRepository
 }
 
 // POST /api/documents/upload
@@ -99,7 +100,8 @@ func (s *server) analyze(w http.ResponseWriter, r *http.Request) {
 	doc.Status = StatusAnalyzing
 	s.store.save(doc)
 
-	result, err := analyzeDocument(doc, s.apiKey, s.mappings)
+	sd := sessionFromContext(r)
+	result, err := analyzeDocument(doc, s.apiKey, &orgScopedMappings{repo: s.mappings, orgID: sd.OrgID})
 	if err != nil {
 		log.Printf("analyze: error for %s: %v", doc.ID, err)
 		doc.Status = StatusError
@@ -204,7 +206,8 @@ func (s *server) saveMapping(w http.ResponseWriter, r *http.Request) {
 	if m.Confidence == 0 {
 		m.Confidence = 1.0
 	}
-	if err := s.mappings.save(&m); err != nil {
+	sd := sessionFromContext(r)
+	if err := s.mappings.save(&m, sd.OrgID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -213,8 +216,9 @@ func (s *server) saveMapping(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/mappings — list all stored mappings.
-func (s *server) listMappings(w http.ResponseWriter, _ *http.Request) {
-	all := s.mappings.all()
+func (s *server) listMappings(w http.ResponseWriter, r *http.Request) {
+	sd := sessionFromContext(r)
+	all := s.mappings.all(sd.OrgID)
 	if all == nil {
 		all = []*Mapping{}
 	}
@@ -226,6 +230,7 @@ func (s *server) listMappings(w http.ResponseWriter, _ *http.Request) {
 //
 //	CustomerPartNumber, InternalPartNumber, ManufacturerPartNumber, Description
 func (s *server) uploadMappings(w http.ResponseWriter, r *http.Request) {
+	sd := sessionFromContext(r)
 	const maxUpload = 4 << 20
 	if err := r.ParseMultipartForm(maxUpload); err != nil {
 		writeError(w, http.StatusBadRequest, "failed to parse form")
@@ -287,7 +292,7 @@ func (s *server) uploadMappings(w http.ResponseWriter, r *http.Request) {
 			Source:                 "csv-upload",
 			Confidence:             1.0,
 		}
-		if err := s.mappings.save(m); err != nil {
+		if err := s.mappings.save(m, sd.OrgID); err != nil {
 			log.Printf("mapping upload: skipping %q: %v", cpn, err)
 			skipped++
 			continue
@@ -297,6 +302,88 @@ func (s *server) uploadMappings(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("mapping upload: saved=%d skipped=%d", saved, skipped)
 	writeJSON(w, http.StatusOK, map[string]int{"saved": saved, "skipped": skipped})
+}
+
+// PUT /api/users/me/password — changes the authenticated user's password.
+func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
+	sd := sessionFromContext(r)
+
+	var req struct {
+		CurrentPassword string `json:"currentPassword"`
+		NewPassword     string `json:"newPassword"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.CurrentPassword) == "" || strings.TrimSpace(req.NewPassword) == "" {
+		writeError(w, http.StatusBadRequest, "currentPassword and newPassword are required")
+		return
+	}
+
+	user, err := s.userRepo.findByID(sd.UserID)
+	if err != nil || user == nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(req.CurrentPassword)); err != nil {
+		writeError(w, http.StatusUnauthorized, "current password is incorrect")
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.NewPassword), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	if err := s.userRepo.updatePassword(sd.UserID, string(hash)); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// GET /api/users/me — returns the current user's IDs.
+func (s *server) getMe(w http.ResponseWriter, r *http.Request) {
+	sd := sessionFromContext(r)
+	writeJSON(w, http.StatusOK, map[string]string{
+		"userId": sd.UserID,
+		"orgId":  sd.OrgID,
+	})
+}
+
+// POST /api/users — create a new user within the caller's organisation.
+func (s *server) createUser(w http.ResponseWriter, r *http.Request) {
+	sd := sessionFromContext(r)
+
+	var req struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if strings.TrimSpace(req.Username) == "" || strings.TrimSpace(req.Password) == "" {
+		writeError(w, http.StatusBadRequest, "username and password are required")
+		return
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+
+	user, err := s.userRepo.createUser(sd.OrgID, req.Username, string(hash))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, user)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

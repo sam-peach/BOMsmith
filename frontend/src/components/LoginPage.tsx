@@ -1,4 +1,6 @@
 import { FormEvent, useState } from 'react'
+import { LogoMark } from './Logo'
+import { colors, shadow, radius, font } from '../theme'
 
 interface Props {
   onLogin: (username: string, password: string) => Promise<void>
@@ -7,8 +9,8 @@ interface Props {
 export default function LoginPage({ onLogin }: Props) {
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [loading,  setLoading]  = useState(false)
+  const [error,    setError]    = useState<string | null>(null)
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -24,10 +26,30 @@ export default function LoginPage({ onLogin }: Props) {
   }
 
   return (
-    <div style={overlay}>
-      <div style={card}>
-        <h1 style={{ margin: '0 0 4px', fontSize: 22, fontWeight: 700 }}>Drawing to BOM</h1>
-        <p style={{ margin: '0 0 28px', color: '#6b7280', fontSize: 14 }}>Sign in to continue</p>
+    <div className="login-bg" style={overlay}>
+      <div className="fade-up" style={card}>
+
+        {/* Brand */}
+        <div style={{ textAlign: 'center', marginBottom: 28 }}>
+          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
+            <LogoMark size={46} />
+          </div>
+          <h1 style={{
+            margin:        '0 0 8px',
+            fontFamily:    font.brand,
+            fontSize:      28,
+            fontWeight:    700,
+            letterSpacing: '-0.04em',
+            color:         colors.text,
+          }}>
+            CairnWorks
+          </h1>
+          <p style={{ margin: 0, color: colors.textMuted, fontSize: 13.5, lineHeight: 1.6 }}>
+            Intelligent BOM extraction for<br />wiring harness manufacturers
+          </p>
+        </div>
+
+        <div style={{ height: 1, background: colors.border, marginBottom: 24 }} />
 
         {error && (
           <div style={errorBox}>{error}</div>
@@ -37,7 +59,7 @@ export default function LoginPage({ onLogin }: Props) {
           <label style={labelStyle}>
             Username
             <input
-              style={inputStyle}
+              className="field-input"
               type="text"
               value={username}
               onChange={e => setUsername(e.target.value)}
@@ -49,7 +71,7 @@ export default function LoginPage({ onLogin }: Props) {
           <label style={labelStyle}>
             Password
             <input
-              style={inputStyle}
+              className="field-input"
               type="password"
               value={password}
               onChange={e => setPassword(e.target.value)}
@@ -61,64 +83,59 @@ export default function LoginPage({ onLogin }: Props) {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
+
       </div>
     </div>
   )
 }
 
 const overlay: React.CSSProperties = {
-  minHeight: '100vh',
-  display: 'flex',
-  alignItems: 'center',
+  minHeight:      '100vh',
+  display:        'flex',
+  alignItems:     'center',
   justifyContent: 'center',
-  background: '#f9fafb',
-  fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif',
+  fontFamily:     font.body,
+  padding:        24,
 }
 
 const card: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 10,
-  padding: '40px 36px',
-  width: '100%',
-  maxWidth: 380,
-  boxShadow: '0 1px 3px rgba(0,0,0,.06)',
+  background:   colors.surface,
+  borderRadius: radius.xl,
+  padding:      '44px 40px',
+  width:        '100%',
+  maxWidth:     400,
+  boxShadow:    shadow.login,
 }
 
 const errorBox: React.CSSProperties = {
-  background: '#fee2e2',
-  color: '#991b1b',
-  padding: '10px 14px',
-  borderRadius: 6,
-  fontSize: 14,
+  background:   colors.errorBg,
+  color:        colors.errorText,
+  border:       `1px solid ${colors.errorBorder}`,
+  padding:      '10px 14px',
+  borderRadius: radius.md,
+  fontSize:     14,
   marginBottom: 16,
 }
 
 const labelStyle: React.CSSProperties = {
-  display: 'flex',
+  display:       'flex',
   flexDirection: 'column',
-  gap: 5,
-  fontSize: 13,
-  fontWeight: 600,
-  color: '#374151',
-}
-
-const inputStyle: React.CSSProperties = {
-  padding: '8px 10px',
-  border: '1px solid #d1d5db',
-  borderRadius: 6,
-  fontSize: 14,
-  outline: 'none',
+  gap:           6,
+  fontSize:      13,
+  fontWeight:    500,
+  color:         colors.text,
 }
 
 const submitBtn: React.CSSProperties = {
-  marginTop: 6,
-  padding: '10px',
-  background: '#2563eb',
-  color: '#fff',
-  border: 'none',
-  borderRadius: 6,
-  cursor: 'pointer',
-  fontSize: 14,
-  fontWeight: 600,
+  marginTop:     8,
+  padding:       '11px',
+  background:    colors.brand,
+  color:         '#fff',
+  border:        'none',
+  borderRadius:  radius.md,
+  cursor:        'pointer',
+  fontSize:      14,
+  fontWeight:    600,
+  letterSpacing: '0.01em',
+  fontFamily:    font.body,
 }

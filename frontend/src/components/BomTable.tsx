@@ -1,5 +1,6 @@
 import { type CSSProperties, useState } from 'react'
 import type { BOMRow, Mapping, Quantity } from '../types/api'
+import { colors, radius } from '../theme'
 
 interface Props {
   rows: BOMRow[]
@@ -76,7 +77,7 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
         </button>
       </div>
 
-      <div style={{ overflowX: 'auto', border: '1px solid #e5e7eb', borderRadius: 8 }}>
+      <div style={{ overflowX: 'auto', border: `1px solid ${colors.border}`, borderRadius: radius.lg }}>
         <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
           <thead>
             <tr>
@@ -305,73 +306,73 @@ function FlagList({ flags }: { flags: string[] }) {
 function rowTint(row: BOMRow): CSSProperties {
   if (row.confidence < 0.65) return { background: '#fff5f5' }
   if (row.flags.includes('unit_ambiguous') || row.flags.includes('missing_part_number'))
-    return { background: '#fffdf0' }
-  if (row.flags.length > 0) return { background: '#fafafa' }
+    return { background: '#fefdf5' }
+  if (row.flags.length > 0) return { background: colors.bg }
   return {}
 }
 
 const th: CSSProperties = {
-  padding: '9px 8px',
-  background: '#f9fafb',
-  borderBottom: '2px solid #e5e7eb',
-  textAlign: 'left',
-  fontWeight: 600,
-  color: '#6b7280',
-  fontSize: 12,
-  whiteSpace: 'nowrap',
+  padding:       '9px 8px',
+  background:    colors.bg,
+  borderBottom:  `2px solid ${colors.border}`,
+  textAlign:     'left',
+  fontWeight:    600,
+  color:         colors.textMuted,
+  fontSize:      11,
+  whiteSpace:    'nowrap',
   textTransform: 'uppercase',
-  letterSpacing: '0.03em',
+  letterSpacing: '0.05em',
 }
 
 const td: CSSProperties = {
-  padding: '5px 8px',
-  borderBottom: '1px solid #f3f4f6',
+  padding:       '5px 8px',
+  borderBottom:  `1px solid ${colors.borderLight}`,
   verticalAlign: 'middle',
 }
 
 const toolbar: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
+  display:        'flex',
+  alignItems:     'center',
   justifyContent: 'space-between',
-  padding: '0 0 8px',
+  padding:        '0 0 8px',
 }
 
 const addBtn: CSSProperties = {
-  padding: '5px 12px',
-  fontSize: 13,
-  background: 'transparent',
-  border: '1px solid #d1d5db',
-  borderRadius: 5,
-  cursor: 'pointer',
-  color: '#374151',
+  padding:      '5px 12px',
+  fontSize:     13,
+  background:   'transparent',
+  border:       `1px solid ${colors.border}`,
+  borderRadius: radius.sm,
+  cursor:       'pointer',
+  color:        colors.textMuted,
 }
 
 const deleteBtn: CSSProperties = {
-  padding: '2px 6px',
-  fontSize: 14,
-  lineHeight: 1,
-  background: 'transparent',
-  border: 'none',
-  borderRadius: 3,
-  cursor: 'pointer',
-  color: '#9ca3af',
-  marginLeft: 2,
+  padding:      '2px 6px',
+  fontSize:     14,
+  lineHeight:   1,
+  background:   'transparent',
+  border:       'none',
+  borderRadius: radius.sm,
+  cursor:       'pointer',
+  color:        colors.textSubtle,
+  marginLeft:   2,
 }
 
 const saveMappingBtn: CSSProperties = {
-  padding: '2px 6px',
-  fontSize: 13,
-  lineHeight: 1,
-  background: 'transparent',
-  border: '1px solid #d1d5db',
-  borderRadius: 3,
-  cursor: 'pointer',
-  color: '#6b7280',
+  padding:      '2px 6px',
+  fontSize:     13,
+  lineHeight:   1,
+  background:   'transparent',
+  border:       `1px solid ${colors.border}`,
+  borderRadius: radius.sm,
+  cursor:       'pointer',
+  color:        colors.textMuted,
 }
 
 const savedMappingBtn: CSSProperties = {
   ...saveMappingBtn,
-  background: '#d1fae5',
-  color: '#065f46',
-  border: '1px solid #6ee7b7',
+  background:  colors.successBg,
+  color:       colors.successText,
+  borderColor: colors.successBorder,
 }
