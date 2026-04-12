@@ -1,5 +1,5 @@
 import { FormEvent, useState } from 'react'
-import { LogoMark } from './Logo'
+import { LogoWordmark } from './Logo'
 import { colors, shadow, radius, font } from '../theme'
 
 interface Props {
@@ -31,19 +31,9 @@ export default function LoginPage({ onLogin }: Props) {
 
         {/* Brand */}
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 16 }}>
-            <LogoMark size={46} />
+          <div style={{ marginBottom: 10 }}>
+            <LogoWordmark size={42} />
           </div>
-          <h1 style={{
-            margin:        '0 0 8px',
-            fontFamily:    font.brand,
-            fontSize:      28,
-            fontWeight:    700,
-            letterSpacing: '-0.04em',
-            color:         colors.text,
-          }}>
-            CairnWorks
-          </h1>
           <p style={{ margin: 0, color: colors.textMuted, fontSize: 13.5, lineHeight: 1.6 }}>
             Intelligent BOM extraction for<br />wiring harness manufacturers
           </p>

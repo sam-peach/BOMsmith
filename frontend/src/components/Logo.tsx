@@ -24,18 +24,16 @@ export function LogoWordmark({
   inverted?: boolean
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 9, userSelect: 'none' }}>
-      <LogoMark size={size} />
-      <span style={{
-        fontFamily:    font.brand,
-        fontSize:      Math.round(size * 0.65),
-        fontWeight:    700,
-        letterSpacing: '-0.03em',
-        color:         inverted ? '#fff' : colors.text,
-        lineHeight:    1,
-      }}>
-        CairnWorks
-      </span>
-    </div>
+    <span style={{
+      fontFamily:    font.brand,
+      fontSize:      Math.round(size * 0.65),
+      fontWeight:    700,
+      letterSpacing: '-0.03em',
+      color:         inverted ? '#fff' : colors.text,
+      lineHeight:    1,
+      userSelect:    'none',
+    }}>
+      CairnWorks
+    </span>
   )
 }
