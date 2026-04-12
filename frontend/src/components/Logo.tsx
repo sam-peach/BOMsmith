@@ -34,7 +34,7 @@ export function LogoWordmark({
       lineHeight:    1,
       userSelect:    'none',
     }}>
-      <span style={{ fontWeight: 700, color }}>CairnWorks</span>
+      <span style={{ fontWeight: 700, color }}>BOMsmith</span>
     </span>
   )
 }
