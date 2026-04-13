@@ -22,3 +22,13 @@ output "github_deploy_role_arn" {
   description = "Set this as AWS_ROLE_ARN in GitHub repository secrets"
   value       = aws_iam_role.github_deploy.arn
 }
+
+output "custom_domain_url" {
+  description = "Custom domain URL (live once DNS propagates and App Runner validates the certificate)"
+  value       = "https://www.${var.domain_name}"
+}
+
+output "app_runner_service_arn" {
+  description = "Set this as APP_RUNNER_SERVICE_ARN in GitHub repository secrets"
+  value       = aws_apprunner_service.app.arn
+}

@@ -16,14 +16,14 @@ WORKDIR /backend
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ .
-RUN CGO_ENABLED=0 GOOS=linux go build -o sme-prototype .
+RUN CGO_ENABLED=0 GOOS=linux go build -o bomsmith .
 
 # Stage 3 — minimal runtime image
 FROM --platform=linux/amd64 alpine:3.20
 RUN apk add --no-cache ca-certificates
 WORKDIR /app
-COPY --from=builder /backend/sme-prototype .
+COPY --from=builder /backend/bomsmith .
 COPY --from=frontend /frontend/dist ./static
 RUN mkdir -p uploads
 EXPOSE 8080
-CMD ["./sme-prototype"]
+CMD ["./bomsmith"]

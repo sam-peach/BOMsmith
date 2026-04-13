@@ -45,6 +45,11 @@ variable "db_password" {
   sensitive   = true
 }
 
+variable "domain_name" {
+  description = "Registered domain name (e.g. bomsmith.io) — www subdomain will be the canonical URL"
+  type        = string
+}
+
 variable "github_repo" {
   description = "GitHub repository in owner/repo format — scopes the OIDC deploy role to this repo's main branch"
   type        = string
