@@ -209,11 +209,11 @@ func TestExportSAP_TwoColumns(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d: %q", len(lines), w.Body.String())
 	}
-	if lines[0] != "W-R-2\t2" {
-		t.Errorf("line 1: want %q, got %q", "W-R-2\t2", lines[0])
+	if lines[0] != "W-R-2\t\t2" {
+		t.Errorf("line 1: want %q, got %q", "W-R-2\t\t2", lines[0])
 	}
-	if lines[1] != "C-001\t1" {
-		t.Errorf("line 2: want %q, got %q", "C-001\t1", lines[1])
+	if lines[1] != "C-001\t\t1" {
+		t.Errorf("line 2: want %q, got %q", "C-001\t\t1", lines[1])
 	}
 }
 
@@ -243,8 +243,8 @@ func TestExportSAP_SkipsRowsWithoutInternalPN(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d: %q", len(lines), w.Body.String())
 	}
-	if lines[0] != "I-001\t3" {
-		t.Errorf("line 1: want %q, got %q", "I-001\t3", lines[0])
+	if lines[0] != "I-001\t\t3" {
+		t.Errorf("line 1: want %q, got %q", "I-001\t\t3", lines[0])
 	}
 }
 
@@ -260,6 +260,55 @@ func TestExportSAP_ContentType(t *testing.T) {
 	ct := w.Header().Get("Content-Type")
 	if !strings.HasPrefix(ct, "text/tab-separated-values") {
 		t.Errorf("Content-Type: want text/tab-separated-values, got %q", ct)
+	}
+}
+
+// TestExportSAP_EmptyColumnRendersBlank verifies that the "empty" column type
+// outputs a blank field, creating the SAP-required spacer between columns.
+func TestExportSAP_EmptyColumnRendersBlank(t *testing.T) {
+	rows := []BOMRow{
+		{
+			LineNumber:         1,
+			Quantity:           Quantity{Raw: "1", Value: fptr(1.0), Unit: sptr("EA")},
+			InternalPartNumber: "43640-0300",
+		},
+	}
+	srv, token := newExportServer(t, rows)
+	srv.orgSettings = &memOrgSettingsRepository{}
+	// Explicitly configure: internal | empty | quantity
+	_ = srv.orgSettings.saveExportConfig(&ExportConfig{
+		Columns: []string{"internalPartNumber", "empty", "quantity"},
+	}, "org-1")
+
+	req := authedRequest(http.MethodGet, "/api/documents/doc-1/export/sap", "", token)
+	req.SetPathValue("id", "doc-1")
+	w := httptest.NewRecorder()
+
+	srv.exportSAP(w, req)
+
+	lines := strings.Split(strings.TrimSpace(w.Body.String()), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d: %q", len(lines), w.Body.String())
+	}
+	want := "43640-0300\t\t1"
+	if lines[0] != want {
+		t.Errorf("want %q, got %q", want, lines[0])
+	}
+}
+
+// TestExportSAP_EmptyColumnIsValidForSaveConfig verifies the "empty" key
+// passes the column validation in saveExportConfig.
+func TestExportSAP_EmptyColumnIsValidForSaveConfig(t *testing.T) {
+	srv, token := newSettingsServer(t)
+	srv.orgSettings = &memOrgSettingsRepository{}
+	body := `{"columns":["internalPartNumber","empty","quantity"],"includeHeader":false}`
+	req := authedRequest(http.MethodPut, "/api/org/export-config", body, token)
+	w := httptest.NewRecorder()
+
+	srv.saveExportConfig(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
 
@@ -284,7 +333,7 @@ func TestExportSAP_DecimalQty(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
-	if lines[0] != "CABLE-001\t0.66" {
-		t.Errorf("want %q, got %q", "CABLE-001\t0.66", lines[0])
+	if lines[0] != "CABLE-001\t\t0.66" {
+		t.Errorf("want %q, got %q", "CABLE-001\t\t0.66", lines[0])
 	}
 }

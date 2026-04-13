@@ -15,6 +15,7 @@ const ALL_COLUMNS: { key: string; label: string }[] = [
   { key: 'customerPartNumber',     label: 'Customer Part Number' },
   { key: 'manufacturerPartNumber', label: 'Manufacturer Part Number' },
   { key: 'notes',                  label: 'Notes' },
+  { key: 'empty',                  label: 'Empty column (spacer)' },
 ]
 
 export default function SettingsPage() {
@@ -32,7 +33,7 @@ export default function SettingsPage() {
   const [inviteError,      setInviteError]      = useState<string | null>(null)
   const [inviteCopied,     setInviteCopied]     = useState(false)
 
-  const [exportCfg,        setExportCfg]        = useState<ExportConfig>({ columns: ['internalPartNumber', 'quantity'], includeHeader: false })
+  const [exportCfg,        setExportCfg]        = useState<ExportConfig>({ columns: ['internalPartNumber', 'empty', 'quantity'], includeHeader: false })
   const [exportSaving,     setExportSaving]     = useState(false)
   const [exportError,      setExportError]      = useState<string | null>(null)
   const [exportSuccess,    setExportSuccess]    = useState(false)

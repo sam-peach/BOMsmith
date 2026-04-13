@@ -9,8 +9,9 @@ import (
 )
 
 // defaultExportConfig is returned when no config has been saved for an org.
+// Column 2 is intentionally blank so the paste lands in the correct SAP fields.
 var defaultExportConfig = &ExportConfig{
-	Columns:       []string{"internalPartNumber", "quantity"},
+	Columns:       []string{"internalPartNumber", "empty", "quantity"},
 	IncludeHeader: false,
 }
 
@@ -25,6 +26,7 @@ var validExportColumns = map[string]string{
 	"internalPartNumber":     "Internal Part Number",
 	"manufacturerPartNumber": "Manufacturer Part Number",
 	"notes":                  "Notes",
+	"empty":                  "",
 }
 
 // orgSettingsRepository stores and retrieves per-org configuration.

@@ -280,6 +280,8 @@ func exportColumnValue(row BOMRow, col string) string {
 		return row.ManufacturerPartNumber
 	case "notes":
 		return row.Notes
+	case "empty":
+		return ""
 	default:
 		return ""
 	}

@@ -56,7 +56,7 @@ export default function App() {
   const [entries,      setEntries]      = useState<Map<string, DocEntry>>(new Map())
   const [activeId,     setActiveId]     = useState<string | null>(null)
   const [copied,       setCopied]       = useState(false)
-  const [exportConfig, setExportConfig] = useState<ExportConfig>({ columns: ['internalPartNumber', 'quantity'], includeHeader: false })
+  const [exportConfig, setExportConfig] = useState<ExportConfig>({ columns: ['internalPartNumber', 'empty', 'quantity'], includeHeader: false })
   const sem = useRef(createSemaphore(ANALYSIS_CONCURRENCY))
 
   useEffect(() => {
@@ -217,6 +217,7 @@ export default function App() {
       case 'internalPartNumber':     return row.internalPartNumber
       case 'manufacturerPartNumber': return row.manufacturerPartNumber
       case 'notes':                  return row.notes
+      case 'empty':                  return ''
       default:                       return ''
     }
   }
