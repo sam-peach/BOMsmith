@@ -19,7 +19,7 @@ import (
 type server struct {
 	store         *documentStore
 	mappings      mappingRepository
-	sessions      *sessionStore
+	sessions      sessionRepository
 	uploadDir     string
 	apiKey        string
 	userRepo      userRepository

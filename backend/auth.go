@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -14,7 +16,18 @@ import (
 
 const sessionCookieName = "sme_session"
 
-// ── session store ─────────────────────────────────────────────────────────────
+// ── sessionRepository interface ───────────────────────────────────────────────
+
+// sessionRepository abstracts session storage so the Postgres-backed
+// implementation can replace the in-memory one without changing any handler code.
+type sessionRepository interface {
+	create(userID, orgID string) string
+	getSession(token string) (sessionData, bool)
+	valid(token string) bool
+	delete(token string)
+}
+
+// ── session data ──────────────────────────────────────────────────────────────
 
 type sessionData struct {
 	UserID string
@@ -74,6 +87,73 @@ func (ss *sessionStore) delete(token string) {
 	ss.mu.Lock()
 	delete(ss.sessions, token)
 	ss.mu.Unlock()
+}
+
+// ── pgSessionStore ────────────────────────────────────────────────────────────
+
+// pgSessionStore persists session tokens in Postgres so they survive server
+// restarts and deployments.
+type pgSessionStore struct {
+	db  *sql.DB
+	ttl time.Duration
+}
+
+func (s *pgSessionStore) create(userID, orgID string) string {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand: " + err.Error())
+	}
+	token := hex.EncodeToString(b)
+	expiresAt := time.Now().Add(s.ttl)
+	if _, err := s.db.Exec(`
+		INSERT INTO sessions (token, user_id, org_id, expires_at)
+		VALUES ($1, $2, $3, $4)`,
+		token, userID, orgID, expiresAt,
+	); err != nil {
+		log.Printf("pgSessionStore.create: %v", err)
+	}
+	// Best-effort cleanup of expired sessions on each create to prevent unbounded growth.
+	go func() {
+		if _, err := s.db.Exec(`DELETE FROM sessions WHERE expires_at < now()`); err != nil {
+			log.Printf("pgSessionStore.cleanup: %v", err)
+		}
+	}()
+	return token
+}
+
+func (s *pgSessionStore) getSession(token string) (sessionData, bool) {
+	var sd sessionData
+	var expiresAt time.Time
+	err := s.db.QueryRow(`
+		SELECT user_id, org_id, expires_at FROM sessions WHERE token = $1`, token,
+	).Scan(&sd.UserID, &sd.OrgID, &expiresAt)
+	if err == sql.ErrNoRows {
+		return sessionData{}, false
+	}
+	if err != nil {
+		log.Printf("pgSessionStore.getSession: %v", err)
+		return sessionData{}, false
+	}
+	if time.Now().After(expiresAt) {
+		_ = s.delete2(token)
+		return sessionData{}, false
+	}
+	sd.expiry = expiresAt
+	return sd, true
+}
+
+func (s *pgSessionStore) valid(token string) bool {
+	_, ok := s.getSession(token)
+	return ok
+}
+
+func (s *pgSessionStore) delete(token string) {
+	_ = s.delete2(token)
+}
+
+func (s *pgSessionStore) delete2(token string) error {
+	_, err := s.db.Exec(`DELETE FROM sessions WHERE token = $1`, token)
+	return err
 }
 
 // ── context helpers ───────────────────────────────────────────────────────────

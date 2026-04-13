@@ -29,6 +29,7 @@ func main() {
 		invites     inviteRepository
 		orgSettings orgSettingsRepository
 		errorLog    errorLogRepository
+		sessions    sessionRepository
 	)
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -56,6 +57,7 @@ func main() {
 		invites     = &pgInviteRepository{db: db}
 		orgSettings = &pgOrgSettingsRepository{db: db}
 		errorLog    = &pgErrorLogRepository{db: db}
+		sessions    = &pgSessionStore{db: db, ttl: 24 * time.Hour}
 		log.Println("using Postgres storage")
 	} else {
 		// Dev/test mode: in-memory stores backed by optional JSON file.
@@ -81,6 +83,7 @@ func main() {
 		invites     = newMemInviteRepo()
 		orgSettings = &memOrgSettingsRepository{}
 		errorLog    = &memErrorLogRepository{}
+		sessions    = newSessionStore(24 * time.Hour)
 
 		ur, err := newEnvUserRepository(authUsername, authPassword)
 		if err != nil {
@@ -93,7 +96,7 @@ func main() {
 	srv := &server{
 		store:         newStore(),
 		mappings:      mappings,
-		sessions:      newSessionStore(24 * time.Hour),
+		sessions:      sessions,
 		uploadDir:     uploadDir,
 		apiKey:        apiKey,
 		userRepo:      userRepo,

@@ -75,6 +75,12 @@ func newAuthServer() *server {
 	}
 }
 
+// ── sessionRepository interface compliance ────────────────────────────────────
+
+// Both implementations must satisfy the interface.
+var _ sessionRepository = (*sessionStore)(nil)
+var _ sessionRepository = (*pgSessionStore)(nil)
+
 // ── sessionStore ──────────────────────────────────────────────────────────────
 
 func TestSessionStore_CreateAndValid(t *testing.T) {
