@@ -5,6 +5,7 @@ import {
   analyzeDocument, checkAuth, exportCSVUrl, exportSAPUrl, exportTSVUrl,
   getExportConfig, login, logout, saveBOM, saveMapping, uploadDocument,
 } from './api/client'
+import AdminPage from './components/AdminPage'
 import BomTable from './components/BomTable'
 import InvitePage from './components/InvitePage'
 import { LogoWordmark } from './components/Logo'
@@ -51,6 +52,7 @@ export default function App() {
   const navigate = useNavigate()
   const location = useLocation()
   const [authed,       setAuthed]       = useState<boolean | null>(null)
+  const [isAdmin,      setIsAdmin]      = useState(false)
   const [entries,      setEntries]      = useState<Map<string, DocEntry>>(new Map())
   const [activeId,     setActiveId]     = useState<string | null>(null)
   const [copied,       setCopied]       = useState(false)
@@ -58,8 +60,9 @@ export default function App() {
   const sem = useRef(createSemaphore(ANALYSIS_CONCURRENCY))
 
   useEffect(() => {
-    checkAuth().then(ok => {
+    checkAuth().then(({ ok, isAdmin }) => {
       setAuthed(ok)
+      setIsAdmin(isAdmin)
       if (ok) getExportConfig().then(setExportConfig).catch(() => {})
     })
   }, [])
@@ -80,6 +83,7 @@ export default function App() {
   async function handleLogin(username: string, password: string) {
     await login(username, password)
     setAuthed(true)
+    checkAuth().then(({ isAdmin }) => setIsAdmin(isAdmin)).catch(() => {})
   }
 
   async function handleLogout() {
@@ -269,6 +273,9 @@ export default function App() {
             <LogoWordmark size={28} />
           </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {isAdmin && (
+              <button style={ghostBtn} onClick={() => navigate('/admin')} title="Admin">Admin</button>
+            )}
             <button style={iconBtn} onClick={() => navigate('/settings')} title="Settings" aria-label="Settings">
               <SlidersIcon />
             </button>
@@ -280,6 +287,7 @@ export default function App() {
       {/* ── Routed content ──────────────────────────────────────────────────── */}
       <Routes>
         <Route path="/settings" element={<SettingsPage />} />
+        {isAdmin && <Route path="/admin" element={<AdminPage />} />}
         <Route path="/" element={
           <main style={mainStyle}>
 

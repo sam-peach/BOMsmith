@@ -90,6 +90,15 @@ type ExportConfig struct {
 	IncludeHeader bool     `json:"includeHeader"`
 }
 
+// ErrorLogEntry records a structured error or warning from the analysis pipeline.
+type ErrorLogEntry struct {
+	Timestamp time.Time `json:"timestamp"`
+	Level     string    `json:"level"`     // "error" | "warn"
+	Component string    `json:"component"` // e.g. "analysis"
+	Message   string    `json:"message"`
+	DocName   string    `json:"docName,omitempty"`
+}
+
 // InviteToken is a single-use link scoped to an organisation.
 type InviteToken struct {
 	ID             string     `json:"id"`

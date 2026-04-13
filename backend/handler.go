@@ -17,14 +17,16 @@ import (
 )
 
 type server struct {
-	store       *documentStore
-	mappings    mappingRepository
-	sessions    *sessionStore
-	uploadDir   string
-	apiKey      string
-	userRepo    userRepository
-	invites     inviteRepository
-	orgSettings orgSettingsRepository
+	store         *documentStore
+	mappings      mappingRepository
+	sessions      *sessionStore
+	uploadDir     string
+	apiKey        string
+	userRepo      userRepository
+	invites       inviteRepository
+	orgSettings   orgSettingsRepository
+	errorLog      errorLogRepository
+	adminUsername string
 }
 
 // POST /api/documents/upload
@@ -108,8 +110,13 @@ func (s *server) analyze(w http.ResponseWriter, r *http.Request) {
 		log.Printf("analyze: error for %s: %v", doc.ID, err)
 		doc.Status = StatusError
 		s.store.save(doc)
+		s.logError("error", "analysis", err.Error(), doc.Filename)
 		writeError(w, http.StatusUnprocessableEntity, err.Error())
 		return
+	}
+
+	for _, warning := range result.Warnings {
+		s.logError("warn", "analysis", warning, doc.Filename)
 	}
 
 	log.Printf("analyze: done %s — %d rows, %d warnings", doc.ID, len(result.BOMRows), len(result.Warnings))
@@ -578,6 +585,43 @@ func (s *server) createUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, user)
+}
+
+// requireAdmin wraps a handler, returning 403 if the logged-in user is not the admin.
+func (s *server) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sd := sessionFromContext(r)
+		user, err := s.userRepo.findByID(sd.UserID)
+		if err != nil || user == nil || user.Username != s.adminUsername {
+			writeError(w, http.StatusForbidden, "forbidden")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// GET /api/admin/errors — returns recent error log entries. Admin only.
+func (s *server) listErrors(w http.ResponseWriter, r *http.Request) {
+	entries, err := s.errorLog.recent(100)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load error log")
+		return
+	}
+	writeJSON(w, http.StatusOK, entries)
+}
+
+// logError appends an entry to the error log if one is configured.
+func (s *server) logError(level, component, message, docName string) {
+	if s.errorLog == nil {
+		return
+	}
+	_ = s.errorLog.append(&ErrorLogEntry{
+		Timestamp: time.Now().UTC(),
+		Level:     level,
+		Component: component,
+		Message:   message,
+		DocName:   docName,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

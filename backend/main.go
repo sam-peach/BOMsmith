@@ -28,6 +28,7 @@ func main() {
 		userRepo    userRepository
 		invites     inviteRepository
 		orgSettings orgSettingsRepository
+		errorLog    errorLogRepository
 	)
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -54,6 +55,7 @@ func main() {
 		userRepo    = &pgUserRepository{db: db}
 		invites     = &pgInviteRepository{db: db}
 		orgSettings = &pgOrgSettingsRepository{db: db}
+		errorLog    = &pgErrorLogRepository{db: db}
 		log.Println("using Postgres storage")
 	} else {
 		// Dev/test mode: in-memory stores backed by optional JSON file.
@@ -78,6 +80,7 @@ func main() {
 		mappings    = &inMemoryMappingRepository{store: ms}
 		invites     = newMemInviteRepo()
 		orgSettings = &memOrgSettingsRepository{}
+		errorLog    = &memErrorLogRepository{}
 
 		ur, err := newEnvUserRepository(authUsername, authPassword)
 		if err != nil {
@@ -88,14 +91,16 @@ func main() {
 	}
 
 	srv := &server{
-		store:       newStore(),
-		mappings:    mappings,
-		sessions:    newSessionStore(24 * time.Hour),
-		uploadDir:   uploadDir,
-		apiKey:      apiKey,
-		userRepo:    userRepo,
-		invites:     invites,
-		orgSettings: orgSettings,
+		store:         newStore(),
+		mappings:      mappings,
+		sessions:      newSessionStore(24 * time.Hour),
+		uploadDir:     uploadDir,
+		apiKey:        apiKey,
+		userRepo:      userRepo,
+		invites:       invites,
+		orgSettings:   orgSettings,
+		errorLog:      errorLog,
+		adminUsername: os.Getenv("AUTH_USERNAME"),
 	}
 
 	staticDir := os.Getenv("STATIC_DIR")
@@ -132,6 +137,11 @@ func main() {
 	mux.HandleFunc("POST /api/invites/{token}/accept", srv.acceptInvite)    // public
 	mux.HandleFunc("GET /api/org/export-config", srv.requireAuth(srv.getExportConfig))
 	mux.HandleFunc("PUT /api/org/export-config", srv.requireAuth(srv.saveExportConfig))
+
+	// Admin routes (require auth + admin role)
+	mux.HandleFunc("GET /api/admin/errors", srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
+		srv.requireAdmin(http.HandlerFunc(srv.listErrors)).ServeHTTP(w, r)
+	}))
 
 	if _, err := os.Stat(staticDir); err == nil {
 		mux.Handle("/", spaHandler(staticDir))

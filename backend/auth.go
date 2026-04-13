@@ -176,6 +176,17 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/auth/me — reached only when requireAuth has already validated the session.
-func (s *server) authMe(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+func (s *server) authMe(w http.ResponseWriter, r *http.Request) {
+	sd := sessionFromContext(r)
+	isAdmin := false
+	if s.adminUsername != "" && s.userRepo != nil {
+		user, err := s.userRepo.findByID(sd.UserID)
+		if err == nil && user != nil {
+			isAdmin = user.Username == s.adminUsername
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"isAdmin": isAdmin,
+	})
 }

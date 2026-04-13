@@ -38,6 +38,14 @@ export interface ExportConfig {
   includeHeader: boolean
 }
 
+export interface ErrorLogEntry {
+  timestamp: string
+  level: string      // "error" | "warn"
+  component: string  // e.g. "analysis"
+  message: string
+  docName?: string
+}
+
 export interface Mapping {
   id: string
   customerPartNumber: string

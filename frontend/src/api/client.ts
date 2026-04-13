@@ -1,4 +1,4 @@
-import type { BOMRow, Document, ExportConfig, Mapping } from '../types/api'
+import type { BOMRow, Document, ErrorLogEntry, ExportConfig, Mapping } from '../types/api'
 
 const BASE = '/api'
 
@@ -96,9 +96,17 @@ export async function saveExportConfig(cfg: ExportConfig): Promise<ExportConfig>
   return res.json()
 }
 
-export async function checkAuth(): Promise<boolean> {
+export async function checkAuth(): Promise<{ ok: boolean; isAdmin: boolean }> {
   const res = await fetch(`${BASE}/auth/me`)
-  return res.ok
+  if (!res.ok) return { ok: false, isAdmin: false }
+  const body = await res.json()
+  return { ok: true, isAdmin: body.isAdmin === true }
+}
+
+export async function getAdminErrors(): Promise<ErrorLogEntry[]> {
+  const res = await fetch(`${BASE}/admin/errors`)
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
 }
 
 export async function login(username: string, password: string): Promise<void> {
