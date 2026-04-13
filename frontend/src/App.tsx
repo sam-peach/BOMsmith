@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { Navigate, Route, Routes, useNavigate } from 'react-router-dom'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import type { BOMRow, Document, DocumentStatus, Mapping } from './types/api'
 import {
   analyzeDocument, checkAuth, exportCSVUrl, exportTSVUrl,
   login, logout, saveBOM, saveMapping, uploadDocument,
 } from './api/client'
 import BomTable from './components/BomTable'
+import InvitePage from './components/InvitePage'
 import { LogoWordmark } from './components/Logo'
 import LoginPage from './components/LoginPage'
 import SettingsPage from './components/SettingsPage'
@@ -48,6 +49,7 @@ const ANALYSIS_CONCURRENCY = 3
 
 export default function App() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [authed,   setAuthed]   = useState<boolean | null>(null)
   const [entries,  setEntries]  = useState<Map<string, DocEntry>>(new Map())
   const [activeId, setActiveId] = useState<string | null>(null)
@@ -217,6 +219,19 @@ export default function App() {
   // ── Render ────────────────────────────────────────────────────────────────
 
   if (authed === null) return null
+
+  // Public route: invite signup — accessible without auth
+  if (location.pathname.startsWith('/invite/')) {
+    return (
+      <Routes>
+        <Route path="/invite/:token" element={
+          <InvitePage onAccepted={() => { setAuthed(true); navigate('/') }} />
+        } />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    )
+  }
+
   if (!authed) return <LoginPage onLogin={handleLogin} />
 
   const activeEntry = activeId ? (entries.get(activeId) ?? null) : null

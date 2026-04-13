@@ -94,6 +94,27 @@ export async function logout(): Promise<void> {
   await fetch(`${BASE}/auth/logout`, { method: 'POST' })
 }
 
+export async function createInvite(): Promise<{ token: string; expiresAt: string; inviteUrl: string }> {
+  const res = await fetch(`${BASE}/invites`, { method: 'POST' })
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function validateInvite(token: string): Promise<{ valid: boolean; orgName: string }> {
+  const res = await fetch(`${BASE}/invites/${encodeURIComponent(token)}`)
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function acceptInvite(token: string, username: string, password: string): Promise<void> {
+  const res = await fetch(`${BASE}/invites/${encodeURIComponent(token)}/accept`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
+}
+
 export async function changePassword(currentPassword: string, newPassword: string): Promise<void> {
   const res = await fetch(`${BASE}/users/me/password`, {
     method: 'PUT',

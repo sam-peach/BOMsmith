@@ -26,6 +26,7 @@ func main() {
 	var (
 		mappings mappingRepository
 		userRepo userRepository
+		invites  inviteRepository
 	)
 
 	dbURL := os.Getenv("DATABASE_URL")
@@ -50,6 +51,7 @@ func main() {
 
 		mappings = &pgMappingRepository{db: db}
 		userRepo = &pgUserRepository{db: db}
+		invites  = &pgInviteRepository{db: db}
 		log.Println("using Postgres storage")
 	} else {
 		// Dev/test mode: in-memory stores backed by optional JSON file.
@@ -72,6 +74,7 @@ func main() {
 			log.Fatalf("mapping store: %v", err)
 		}
 		mappings = &inMemoryMappingRepository{store: ms}
+		invites  = newMemInviteRepo()
 
 		ur, err := newEnvUserRepository(authUsername, authPassword)
 		if err != nil {
@@ -88,6 +91,7 @@ func main() {
 		uploadDir: uploadDir,
 		apiKey:    apiKey,
 		userRepo:  userRepo,
+		invites:   invites,
 	}
 
 	staticDir := os.Getenv("STATIC_DIR")
@@ -118,6 +122,9 @@ func main() {
 	mux.HandleFunc("GET /api/users/me", srv.requireAuth(srv.getMe))
 	mux.HandleFunc("PUT /api/users/me/password", srv.requireAuth(srv.changePassword))
 	mux.HandleFunc("POST /api/users", srv.requireAuth(srv.createUser))
+	mux.HandleFunc("POST /api/invites", srv.requireAuth(srv.createInvite))
+	mux.HandleFunc("GET /api/invites/{token}", srv.validateInvite)          // public
+	mux.HandleFunc("POST /api/invites/{token}/accept", srv.acceptInvite)    // public
 
 	if _, err := os.Stat(staticDir); err == nil {
 		mux.Handle("/", spaHandler(staticDir))

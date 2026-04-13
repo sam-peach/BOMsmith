@@ -23,6 +23,7 @@ type server struct {
 	uploadDir string
 	apiKey    string
 	userRepo  userRepository
+	invites   inviteRepository
 }
 
 // POST /api/documents/upload

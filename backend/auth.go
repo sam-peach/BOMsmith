@@ -95,6 +95,7 @@ type userRepository interface {
 	findByID(id string) (*User, error)
 	createUser(orgID, username, passwordHash string) (*User, error)
 	updatePassword(userID, newPasswordHash string) error
+	findOrgByID(orgID string) (*Organization, error)
 }
 
 // ── middleware ────────────────────────────────────────────────────────────────

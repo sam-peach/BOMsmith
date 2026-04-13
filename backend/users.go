@@ -146,3 +146,7 @@ func (r *envUserRepository) findByUsername(username string) (*User, error) {
 func (r *envUserRepository) createUser(_, _, _ string) (*User, error) {
 	return nil, fmt.Errorf("user creation is not supported in dev mode (no DATABASE_URL set)")
 }
+
+func (r *envUserRepository) findOrgByID(orgID string) (*Organization, error) {
+	return &Organization{ID: orgID, Name: "Dev Org"}, nil
+}

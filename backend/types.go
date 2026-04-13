@@ -83,3 +83,15 @@ type AnalysisResult struct {
 	BOMRows  []BOMRow
 	Warnings []string
 }
+
+// InviteToken is a single-use link scoped to an organisation.
+type InviteToken struct {
+	ID             string     `json:"id"`
+	OrganizationID string     `json:"-"`
+	OrgName        string     `json:"orgName"`
+	Token          string     `json:"token"`
+	ExpiresAt      time.Time  `json:"expiresAt"`
+	UsedAt         *time.Time `json:"usedAt,omitempty"`
+	UsedByUserID   string     `json:"-"`
+	CreatedAt      time.Time  `json:"createdAt"`
+}

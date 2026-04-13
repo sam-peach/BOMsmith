@@ -53,6 +53,10 @@ func (r *memUserRepository) createUser(orgID, username, passwordHash string) (*U
 	return u, nil
 }
 
+func (r *memUserRepository) findOrgByID(orgID string) (*Organization, error) {
+	return &Organization{ID: orgID, Name: "Test Org"}, nil
+}
+
 func newAuthServer() *server {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
 	return &server{

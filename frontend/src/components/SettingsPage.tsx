@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { changePassword } from '../api/client'
+import { changePassword, createInvite } from '../api/client'
 import { colors, font, radius, shadow } from '../theme'
 
 export default function SettingsPage() {
@@ -11,6 +11,36 @@ export default function SettingsPage() {
   const [saving,           setSaving]           = useState(false)
   const [error,            setError]            = useState<string | null>(null)
   const [success,          setSuccess]          = useState(false)
+
+  const [inviteUrl,        setInviteUrl]        = useState<string | null>(null)
+  const [inviteExpiry,     setInviteExpiry]     = useState<string | null>(null)
+  const [inviteLoading,    setInviteLoading]    = useState(false)
+  const [inviteError,      setInviteError]      = useState<string | null>(null)
+  const [inviteCopied,     setInviteCopied]     = useState(false)
+
+  async function handleCreateInvite() {
+    setInviteError(null)
+    setInviteUrl(null)
+    setInviteLoading(true)
+    try {
+      const { inviteUrl: path, expiresAt } = await createInvite()
+      const fullUrl = `${window.location.origin}${path}`
+      setInviteUrl(fullUrl)
+      setInviteExpiry(new Date(expiresAt).toLocaleDateString(undefined, { dateStyle: 'medium' }))
+    } catch (e) {
+      setInviteError((e as Error).message)
+    } finally {
+      setInviteLoading(false)
+    }
+  }
+
+  function handleCopyInvite() {
+    if (!inviteUrl) return
+    navigator.clipboard.writeText(inviteUrl).then(() => {
+      setInviteCopied(true)
+      setTimeout(() => setInviteCopied(false), 2000)
+    })
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -52,6 +82,40 @@ export default function SettingsPage() {
           Manage your account settings.
         </p>
       </div>
+
+        <section style={{ ...card, marginBottom: 16 }}>
+          <h2 style={{ margin: '0 0 12px', fontSize: 15, fontWeight: 600, color: colors.text }}>
+            Invite Users
+          </h2>
+          <p style={{ margin: '0 0 16px', fontSize: 13, color: colors.textMuted, lineHeight: 1.5 }}>
+            Generate a single-use invite link. Anyone with the link can create an account in your organization. Links expire after 7 days.
+          </p>
+
+          {inviteError && <div style={errorBanner}>{inviteError}</div>}
+
+          <button style={primaryBtn} onClick={handleCreateInvite} disabled={inviteLoading}>
+            {inviteLoading ? 'Generating…' : 'Generate invite link'}
+          </button>
+
+          {inviteUrl && (
+            <div style={inviteBox}>
+              <div style={{ fontSize: 12, color: colors.textMuted, marginBottom: 6 }}>
+                Share this link — expires {inviteExpiry}
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  readOnly
+                  value={inviteUrl}
+                  style={inviteInput}
+                  onFocus={e => e.target.select()}
+                />
+                <button style={inviteLoading ? primaryBtn : (inviteCopied ? savedBtn : secondaryBtn)} onClick={handleCopyInvite}>
+                  {inviteCopied ? 'Copied ✓' : 'Copy'}
+                </button>
+              </div>
+            </div>
+          )}
+        </section>
 
         <section style={card}>
           <h2 style={{ margin: '0 0 20px', fontSize: 15, fontWeight: 600, color: colors.text }}>
@@ -189,4 +253,45 @@ const errorBanner: React.CSSProperties = {
   borderRadius: radius.md,
   fontSize:     14,
   marginBottom: 16,
+}
+
+const secondaryBtn: React.CSSProperties = {
+  padding:      '9px 16px',
+  background:   colors.surface,
+  color:        colors.text,
+  border:       `1px solid ${colors.border}`,
+  borderRadius: radius.md,
+  cursor:       'pointer',
+  fontSize:     14,
+  fontWeight:   500,
+  fontFamily:   font.body,
+  flexShrink:   0,
+}
+
+const savedBtn: React.CSSProperties = {
+  ...secondaryBtn,
+  background:   colors.successBg,
+  color:        colors.successText,
+  borderColor:  colors.successBorder,
+}
+
+const inviteBox: React.CSSProperties = {
+  marginTop:    16,
+  padding:      '14px 16px',
+  background:   colors.bg,
+  border:       `1px solid ${colors.border}`,
+  borderRadius: radius.md,
+}
+
+const inviteInput: React.CSSProperties = {
+  flex:         1,
+  padding:      '8px 10px',
+  fontSize:     13,
+  fontFamily:   font.body,
+  background:   colors.surface,
+  color:        colors.text,
+  border:       `1px solid ${colors.border}`,
+  borderRadius: radius.md,
+  outline:      'none',
+  minWidth:     0,
 }
