@@ -265,7 +265,9 @@ export default function App() {
       {/* ── Sticky nav ──────────────────────────────────────────────────────── */}
       <header style={navHeader}>
         <div style={navInner}>
-          <LogoWordmark size={28} />
+          <button style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }} onClick={() => navigate('/')} aria-label="Go to home">
+            <LogoWordmark size={28} />
+          </button>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button style={iconBtn} onClick={() => navigate('/settings')} title="Settings" aria-label="Settings">
               <SlidersIcon />
