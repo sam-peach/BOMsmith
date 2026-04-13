@@ -194,12 +194,12 @@ export default function SettingsPage() {
           {exportSuccess && <div style={successBanner}>Export settings saved.</div>}
 
           <form onSubmit={handleSaveExportConfig}>
-            <div style={{ marginBottom: 16 }}>
+            <div style={{ border: `1px solid ${colors.border}`, borderRadius: radius.md, marginBottom: 20, overflow: 'hidden' }}>
               {ALL_COLUMNS.map(({ key, label }) => {
                 const included = exportCfg.columns.includes(key)
                 const idx      = exportCfg.columns.indexOf(key)
                 return (
-                  <div key={key} style={columnRow}>
+                  <div key={key} style={{ ...columnRow, padding: '8px 12px' }}>
                     <label style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, cursor: 'pointer' }}>
                       <input
                         type="checkbox"
@@ -224,7 +224,7 @@ export default function SettingsPage() {
                           onClick={() => moveColumn(key, 1)}
                           aria-label="Move down"
                         >↓</button>
-                        <span style={{ fontSize: 11, color: colors.textMuted, minWidth: 18, textAlign: 'center', lineHeight: '26px' }}>
+                        <span style={{ fontSize: 11, color: colors.textMuted, minWidth: 20, textAlign: 'right', lineHeight: '28px' }}>
                           {idx + 1}
                         </span>
                       </div>
@@ -232,16 +232,17 @@ export default function SettingsPage() {
                   </div>
                 )
               })}
+              <div style={{ padding: '8px 12px', borderTop: `1px solid ${colors.border}`, background: colors.bg }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={exportCfg.includeHeader}
+                    onChange={e => setExportCfg(prev => ({ ...prev, includeHeader: e.target.checked }))}
+                  />
+                  <span style={{ fontSize: 13 }}>Include header row</span>
+                </label>
+              </div>
             </div>
-
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16, cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={exportCfg.includeHeader}
-                onChange={e => setExportCfg(prev => ({ ...prev, includeHeader: e.target.checked }))}
-              />
-              <span style={{ fontSize: 13 }}>Include header row</span>
-            </label>
 
             <button type="submit" style={primaryBtn} disabled={exportSaving}>
               {exportSaving ? 'Saving…' : 'Save export settings'}
@@ -329,13 +330,12 @@ function Field({
 // ── Styles ──────────────────────────────────────────────────────────────────
 
 const mainStyle: React.CSSProperties = {
-  maxWidth: 1200,
+  maxWidth: 640,
   margin:   '0 auto',
   padding:  '36px 24px 72px',
 }
 
 const card: React.CSSProperties = {
-  maxWidth:     480,
   background:   colors.surface,
   border:       `1px solid ${colors.border}`,
   borderRadius: radius.lg,
@@ -419,20 +419,21 @@ const columnRow: React.CSSProperties = {
   display:        'flex',
   alignItems:     'center',
   justifyContent: 'space-between',
-  padding:        '6px 0',
+  padding:        '8px 0',
   borderBottom:   `1px solid ${colors.border}`,
 }
 
 const arrowBtn: React.CSSProperties = {
-  padding:      '0 6px',
-  height:       26,
-  background:   colors.surface,
+  padding:      '0 7px',
+  height:       28,
+  background:   colors.bg,
   border:       `1px solid ${colors.border}`,
   borderRadius: radius.sm,
   cursor:       'pointer',
-  fontSize:     12,
+  fontSize:     13,
   color:        colors.text,
   fontFamily:   font.body,
+  lineHeight:   '26px',
 }
 
 const inviteInput: React.CSSProperties = {
