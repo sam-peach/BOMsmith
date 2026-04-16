@@ -46,6 +46,11 @@ func main() {
 		log.Fatalf("migrations: %v", err)
 	}
 
+	store := &pgDocumentStore{db: db}
+	if err := store.resetAnalyzing(); err != nil {
+		log.Fatalf("reset stale analyses: %v", err)
+	}
+
 	orgName := os.Getenv("ORG_NAME")
 	adminUsername := os.Getenv("AUTH_USERNAME")
 	adminPassword := os.Getenv("AUTH_PASSWORD")
@@ -56,7 +61,6 @@ func main() {
 		log.Fatalf("seed admin: %v", err)
 	}
 
-	store         := &pgDocumentStore{db: db}
 	matchFeedback := &pgMatchFeedbackRepository{db: db}
 	mappings      := &pgMappingRepository{db: db}
 	userRepo      := &pgUserRepository{db: db}
@@ -96,9 +100,11 @@ func main() {
 	// Protected routes
 	mux.HandleFunc("POST /api/auth/logout", srv.requireAuth(srv.logout))
 	mux.HandleFunc("GET /api/auth/me", srv.requireAuth(srv.authMe))
+	mux.HandleFunc("GET /api/documents", srv.requireAuth(srv.listDocuments))
 	mux.HandleFunc("POST /api/documents/upload", srv.requireAuth(srv.upload))
 	mux.HandleFunc("POST /api/documents/{id}/analyze", srv.requireAuth(srv.analyze))
 	mux.HandleFunc("GET /api/documents/{id}", srv.requireAuth(srv.get))
+	mux.HandleFunc("DELETE /api/documents/{id}", srv.requireAuth(srv.deleteDocument))
 	mux.HandleFunc("GET /api/documents/{id}/bom.csv", srv.requireAuth(srv.exportCSV))
 	mux.HandleFunc("GET /api/documents/{id}/export/sap", srv.requireAuth(srv.exportSAP))
 	mux.HandleFunc("PUT /api/documents/{id}/bom", srv.requireAuth(srv.saveBOM))
@@ -183,7 +189,7 @@ func cors(next http.Handler) http.Handler {
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", origin)
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)

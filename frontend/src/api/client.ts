@@ -23,18 +23,39 @@ export async function analyzeDocument(id: string): Promise<Document> {
   // Kick off async analysis — server returns 202 immediately.
   const res = await fetch(`${BASE}/documents/${id}/analyze`, { method: 'POST' })
   if (!res.ok) throw new Error(await parseError(res))
+  return waitForAnalysis(id)
+}
 
-  // Poll until the status leaves "analyzing".
+// waitForAnalysis polls GET /documents/{id} until analysis completes.
+// Used both by analyzeDocument (after POST) and to resume polling on page load.
+export async function waitForAnalysis(id: string): Promise<Document> {
   const pollIntervalMs = 2000
   const timeoutMs = 6 * 60 * 1000 // 6 minutes (matches server-side LLM timeout)
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
-    const doc = await getDocument(id)
+    let doc: Document
+    try {
+      doc = await getDocument(id)
+    } catch {
+      // 404 means the document was deleted (cancelled) while we were polling.
+      throw new Error('Cancelled')
+    }
     if (doc.status === 'done') return doc
     if (doc.status === 'error') throw new Error(doc.errorMessage ?? 'Analysis failed')
   }
   throw new Error('Analysis timed out — the drawing may be too large. Try splitting it into sections.')
+}
+
+export async function listDocuments(): Promise<Document[]> {
+  const res = await fetch(`${BASE}/documents`)
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function deleteDocument(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/documents/${id}`, { method: 'DELETE' })
+  if (!res.ok && res.status !== 404) throw new Error(await parseError(res))
 }
 
 export async function getDocument(id: string): Promise<Document> {

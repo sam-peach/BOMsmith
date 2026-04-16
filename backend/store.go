@@ -13,9 +13,16 @@ import (
 type documentRepository interface {
 	save(doc *Document)
 	get(id string) (*Document, error)
+	// list returns all documents for the given org across all statuses.
+	list(orgID string) ([]*Document, error)
 	// listByOrg returns all status=done documents for the given org,
 	// used by the similarity engine to find repeat parts.
 	listByOrg(orgID string) ([]*Document, error)
+	// delete removes a document by ID. Returns nil if the document does not exist.
+	delete(id string) error
+	// resetAnalyzing transitions any analyzing document to error state.
+	// Called at startup to clean up jobs killed by a server restart.
+	resetAnalyzing() error
 }
 
 // ── memDocumentStore ──────────────────────────────────────────────────────────
@@ -45,6 +52,18 @@ func (s *memDocumentStore) get(id string) (*Document, error) {
 	return doc, nil
 }
 
+func (s *memDocumentStore) list(orgID string) ([]*Document, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var out []*Document
+	for _, doc := range s.docs {
+		if doc.OrganizationID == orgID {
+			out = append(out, doc)
+		}
+	}
+	return out, nil
+}
+
 func (s *memDocumentStore) listByOrg(orgID string) ([]*Document, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -55,6 +74,25 @@ func (s *memDocumentStore) listByOrg(orgID string) ([]*Document, error) {
 		}
 	}
 	return out, nil
+}
+
+func (s *memDocumentStore) delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.docs, id)
+	return nil
+}
+
+func (s *memDocumentStore) resetAnalyzing() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, doc := range s.docs {
+		if doc.Status == StatusAnalyzing {
+			doc.Status = StatusError
+			doc.ErrorMessage = "Analysis was interrupted by a server restart — please re-analyse."
+		}
+	}
+	return nil
 }
 
 // ── pgDocumentStore ───────────────────────────────────────────────────────────
@@ -201,4 +239,69 @@ func (s *pgDocumentStore) listByOrg(orgID string) ([]*Document, error) {
 		out = append(out, &doc)
 	}
 	return out, nil
+}
+
+func (s *pgDocumentStore) list(orgID string) ([]*Document, error) {
+	rows, err := s.db.Query(`
+		SELECT id, organization_id, filename, status, bom_rows, warnings, cloned_from_id, uploaded_at,
+		       file_size_bytes, analysis_duration_ms, error_message
+		FROM documents
+		WHERE organization_id = $1
+		ORDER BY uploaded_at DESC
+		LIMIT 200`, orgID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("pgDocumentStore.list: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Document
+	for rows.Next() {
+		var doc Document
+		var bomJSON, warnJSON string
+		var clonedFrom sql.NullString
+		var analysisDuration sql.NullInt64
+		var errorMessage sql.NullString
+
+		if err := rows.Scan(&doc.ID, &doc.OrganizationID, &doc.Filename, &doc.Status,
+			&bomJSON, &warnJSON, &clonedFrom, &doc.UploadedAt,
+			&doc.FileSizeBytes, &analysisDuration, &errorMessage); err != nil {
+			log.Printf("pgDocumentStore.list scan: %v", err)
+			continue
+		}
+		if err := json.Unmarshal([]byte(bomJSON), &doc.BOMRows); err != nil {
+			log.Printf("pgDocumentStore.list unmarshal bom_rows: %v", err)
+			continue
+		}
+		if err := json.Unmarshal([]byte(warnJSON), &doc.Warnings); err != nil {
+			log.Printf("pgDocumentStore.list unmarshal warnings: %v", err)
+			continue
+		}
+		if clonedFrom.Valid {
+			doc.ClonedFromID = clonedFrom.String
+		}
+		if analysisDuration.Valid {
+			doc.AnalysisDurationMs = analysisDuration.Int64
+		}
+		if errorMessage.Valid {
+			doc.ErrorMessage = errorMessage.String
+		}
+		out = append(out, &doc)
+	}
+	return out, nil
+}
+
+func (s *pgDocumentStore) delete(id string) error {
+	_, err := s.db.Exec(`DELETE FROM documents WHERE id = $1`, id)
+	return err
+}
+
+func (s *pgDocumentStore) resetAnalyzing() error {
+	_, err := s.db.Exec(`
+		UPDATE documents
+		SET status        = 'error',
+		    error_message = 'Analysis was interrupted by a server restart — please re-analyse.',
+		    updated_at    = now()
+		WHERE status = 'analyzing'`)
+	return err
 }

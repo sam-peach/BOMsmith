@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import type { BOMRow, Document, DocumentStatus, ExportConfig, Mapping } from './types/api'
 import {
-  analyzeDocument, checkAuth, exportCSVUrl, exportSAPUrl, exportTSVUrl,
-  getExportConfig, login, logout, saveBOM, saveMapping, uploadDocument,
+  analyzeDocument, checkAuth, deleteDocument, exportCSVUrl, exportSAPUrl, exportTSVUrl,
+  getExportConfig, listDocuments, login, logout, saveBOM, saveMapping, uploadDocument,
+  waitForAnalysis,
 } from './api/client'
 import AdminPage from './components/AdminPage'
 import BomTable from './components/BomTable'
@@ -65,9 +66,66 @@ export default function App() {
     checkAuth().then(({ ok, isAdmin }) => {
       setAuthed(ok)
       setIsAdmin(isAdmin)
-      if (ok) getExportConfig().then(setExportConfig).catch(() => {})
+      if (ok) {
+        getExportConfig().then(setExportConfig).catch(() => {})
+        loadPersistedDocuments()
+      }
     })
   }, [])
+
+  async function loadPersistedDocuments() {
+    let docs: Document[]
+    try {
+      docs = await listDocuments()
+    } catch {
+      return
+    }
+    if (docs.length === 0) return
+
+    const initial = new Map<string, DocEntry>()
+    for (const doc of docs) {
+      initial.set(doc.id, {
+        doc,
+        rows:              doc.bomRows ?? [],
+        uploading:         false,
+        saved:             true,
+        error:             doc.status === 'error' ? (doc.errorMessage ?? 'Analysis failed') : null,
+        analysisStartedAt: doc.status === 'analyzing' ? Date.now() : null,
+      })
+    }
+    setEntries(initial)
+    // Select the most recent doc.
+    setActiveId(docs[0]?.id ?? null)
+
+    // Resume polling for any docs still in-flight from a previous session.
+    for (const doc of docs) {
+      if (doc.status === 'analyzing') {
+        resumePolling(doc.id)
+      }
+    }
+  }
+
+  async function resumePolling(id: string) {
+    await sem.current.acquire()
+    try {
+      const result = await waitForAnalysis(id)
+      patchEntry(id, { doc: result, rows: result.bomRows, saved: true, analysisStartedAt: null })
+    } catch (e) {
+      const msg = (e as Error).message
+      if (msg === 'Cancelled') {
+        // Doc was deleted server-side; remove from local state.
+        setEntries(prev => { const next = new Map(prev); next.delete(id); return next })
+      } else {
+        patchEntry(id, {
+          doc: { ...(entries.get(id)?.doc ?? {} as Document), status: 'error' },
+          error: msg,
+          analysisStartedAt: null,
+        })
+      }
+    } finally {
+      sem.current.release()
+    }
+  }
 
   // Functional update helper — safe to call from any async context.
   function patchEntry(id: string, patch: Partial<DocEntry>) {
@@ -213,7 +271,8 @@ export default function App() {
     patchEntry(id, { rows, saved: false })
   }
 
-  function handleRemove(id: string) {
+  async function handleRemove(id: string) {
+    // Remove from local state immediately for responsiveness.
     setEntries(prev => {
       const next = new Map(prev)
       next.delete(id)
@@ -221,10 +280,15 @@ export default function App() {
     })
     setActiveId(prev => {
       if (prev !== id) return prev
-      // Pick the first remaining entry as the new active, or null.
       const remaining = [...entries.keys()].filter(k => k !== id)
       return remaining[0] ?? null
     })
+    // Persist the deletion — cancels any in-flight analysis goroutine.
+    try {
+      await deleteDocument(id)
+    } catch {
+      // Best-effort; local state already updated.
+    }
   }
 
   function exportColumnValue(row: BOMRow, col: string): string {
@@ -481,12 +545,12 @@ function DocCard({
         minWidth:     0,
       }}
     >
-      {/* Remove button — only when not busy */}
-      {!busy && (
+      {/* Remove/cancel button — always visible; cancels in-flight analysis */}
+      {!uploading && (
         <button
           onClick={e => { e.stopPropagation(); onRemove() }}
           style={cardRemoveBtn}
-          title="Remove"
+          title={busy ? 'Cancel analysis' : 'Remove'}
         >×</button>
       )}
 

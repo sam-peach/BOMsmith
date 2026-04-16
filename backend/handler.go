@@ -171,6 +171,36 @@ func (s *server) analyze(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, doc)
 }
 
+// GET /api/documents — list all documents for the authenticated org.
+func (s *server) listDocuments(w http.ResponseWriter, r *http.Request) {
+	sd := sessionFromContext(r)
+	docs, err := s.store.list(sd.OrgID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load documents")
+		return
+	}
+	if docs == nil {
+		docs = []*Document{}
+	}
+	writeJSON(w, http.StatusOK, docs)
+}
+
+// DELETE /api/documents/{id} — explicitly remove a document.
+// If analysis is in progress the goroutine's final save will be a no-op
+// because the document will no longer be found in the store.
+func (s *server) deleteDocument(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := s.store.get(id); err != nil {
+		writeError(w, http.StatusNotFound, "document not found")
+		return
+	}
+	if err := s.store.delete(id); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete document")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // GET /api/documents/{id}
 func (s *server) get(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
