@@ -348,6 +348,13 @@ export default function App() {
   const hasEntries  = entries.size > 0
   const hasResults  = activeEntry?.doc.status === 'done' && (activeEntry.rows.length > 0)
 
+  // Derive a conservative time estimate from completed jobs in this session.
+  const estimatedMs = computeEstimate(
+    [...entries.values()]
+      .filter(e => e.doc.status === 'done' && (e.doc.analysisDurationMs ?? 0) > 0)
+      .map(e => e.doc.analysisDurationMs!)
+  )
+
   return (
     <div style={{ fontFamily: font.body, minHeight: '100vh', background: colors.bg, color: colors.text }}>
 
@@ -400,6 +407,7 @@ export default function App() {
                     key={id}
                     entry={entry}
                     active={id === activeId}
+                    estimatedMs={estimatedMs}
                     onClick={() => setActiveId(id)}
                     onRemove={() => handleRemove(id)}
                     onRetry={() => runAnalysis(id)}
@@ -424,7 +432,7 @@ export default function App() {
                     </span>
                     <StatusBadge status={activeEntry.doc.status} uploading={activeEntry.uploading} />
                     {activeEntry.doc.status === 'analyzing' && activeEntry.analysisStartedAt !== null && (
-                      <ElapsedTimer startedAt={activeEntry.analysisStartedAt} />
+                      <ElapsedTimer startedAt={activeEntry.analysisStartedAt} estimatedMs={estimatedMs} />
                     )}
                     {activeEntry.doc.status === 'done' && activeEntry.doc.analysisDurationMs != null && activeEntry.doc.analysisDurationMs > 0 && (
                       <span style={{ fontSize: 12, color: colors.textMuted }} title="Analysis took">
@@ -481,7 +489,7 @@ export default function App() {
                     Analyzing drawing…
                     {activeEntry.analysisStartedAt !== null && (
                       <div style={{ marginTop: 8 }}>
-                        <ElapsedTimer startedAt={activeEntry.analysisStartedAt} />
+                        <ElapsedTimer startedAt={activeEntry.analysisStartedAt} estimatedMs={estimatedMs} />
                       </div>
                     )}
                   </EmptyState>
@@ -507,25 +515,47 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
-function ElapsedTimer({ startedAt }: { startedAt: number }) {
+// computeEstimate returns a conservative estimated analysis duration in ms.
+// Uses the P75 of historical completed-job durations × 1.25.
+// Falls back to 90s if there is no history.
+export function computeEstimate(durationsMs: number[]): number {
+  const DEFAULT_MS = 90_000
+  const BUFFER = 1.25
+  if (durationsMs.length === 0) return DEFAULT_MS
+  const sorted = [...durationsMs].sort((a, b) => a - b)
+  const p75 = sorted[Math.floor(sorted.length * 0.75)]
+  return Math.round(p75 * BUFFER)
+}
+
+function ElapsedTimer({ startedAt, estimatedMs }: { startedAt: number; estimatedMs?: number }) {
   const [elapsed, setElapsed] = useState(Date.now() - startedAt)
   useEffect(() => {
     const id = setInterval(() => setElapsed(Date.now() - startedAt), 1000)
     return () => clearInterval(id)
   }, [startedAt])
+
+  // Show the estimate once the job has been running for at least 5 seconds.
+  if (estimatedMs != null && elapsed >= 5_000) {
+    const remaining = estimatedMs - elapsed
+    if (remaining <= 0) {
+      return <span style={{ fontSize: 11, color: colors.textMuted }}>almost done…</span>
+    }
+    return <span style={{ fontSize: 11, color: colors.textMuted }}>~{formatElapsed(remaining)} remaining</span>
+  }
   return <span style={{ fontSize: 11, color: colors.textMuted }}>{formatElapsed(elapsed)}</span>
 }
 
 // ── DocCard ───────────────────────────────────────────────────────────────────
 
 function DocCard({
-  entry, active, onClick, onRemove, onRetry,
+  entry, active, estimatedMs, onClick, onRemove, onRetry,
 }: {
-  entry:    DocEntry
-  active:   boolean
-  onClick:  () => void
-  onRemove: () => void
-  onRetry:  () => void
+  entry:       DocEntry
+  active:      boolean
+  estimatedMs: number
+  onClick:     () => void
+  onRemove:    () => void
+  onRetry:     () => void
 }) {
   const { doc, rows, uploading, error, analysisStartedAt } = entry
   const busy = uploading || doc.status === 'analyzing'
@@ -569,7 +599,7 @@ function DocCard({
           </span>
         )}
         {doc.status === 'analyzing' && analysisStartedAt !== null && (
-          <ElapsedTimer startedAt={analysisStartedAt} />
+          <ElapsedTimer startedAt={analysisStartedAt} estimatedMs={estimatedMs} />
         )}
         {doc.status === 'done' && doc.analysisDurationMs != null && doc.analysisDurationMs > 0 && (
           <span style={{ fontSize: 11, color: colors.textSubtle }} title="Analysis time">
