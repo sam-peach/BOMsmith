@@ -13,10 +13,13 @@ import (
 )
 
 const (
-	anthropicAPIURL  = "https://api.anthropic.com/v1/messages"
 	anthropicVersion = "2023-06-01"
 	anthropicModel   = "claude-sonnet-4-6"
+	anthropicMaxTokens = 32000
 )
+
+// anthropicAPIURL is a var so tests can swap it for a local httptest server.
+var anthropicAPIURL = "https://api.anthropic.com/v1/messages"
 
 var anthropicClient = &http.Client{Timeout: 5 * time.Minute}
 
@@ -57,7 +60,9 @@ func interpretText(text, apiKey string, ms mappingReader) (AnalysisResult, error
 	return AnalysisResult{BOMRows: rows, Warnings: warnings}, nil
 }
 
-// callAnthropic sends the drawing text to the Claude API and returns the raw text response.
+// callAnthropic sends the drawing text to the Claude API using tool use to
+// guarantee structured JSON output. The model is forced to call extract_bom,
+// so it can never return prose instead of a BOM array.
 func callAnthropic(drawingText, apiKey string) (string, error) {
 	system := `You are a BOM extraction assistant for a wiring harness manufacturer.
 
@@ -86,48 +91,65 @@ TYPE REFERENCE TABLES — do NOT emit as BOM rows
    Sheet 3 may contain "Heatshrink & Cable Sleeve Type Reference" or similar tables
    whose columns are Type No. | Specification | Approvals | Comments.
    These are specification catalogues, not BOM items — they list what HS1/SL2/HM3 etc.
-   mean, not how many are needed. Set "reference_entry": true for any row sourced from
+   mean, not how many are needed. Set reference_entry to true for any row sourced from
    such a table. The backend will filter them out before presenting results to the user.
-
-OUTPUT FORMAT
-Single valid JSON array. No markdown. No code fences. Begin with [.
-
-Each element must have exactly these fields:
-  rawLabel               (string)  — label as it appears on the drawing
-  description            (string)  — clear engineering description including key spec
-  rawQuantity            (string)  — quantity EXACTLY as written on the drawing; NEVER transform
-  unit                   (string)  — canonical unit: EA for each, M for metres
-  customerPartNumber     (string)  — "" for wiring harness drawings
-  manufacturerPartNumber (string)  — from Part Reference table; "" if absent
-  supplierReference      (string)  — RS or Farnell distributor code if present; "" otherwise
-  notes                  (string)  — concise; "" if nothing to flag
-  confidence             (number)  — 0.0–1.0
-  flags                  (array)   — subset of: needs-review, low-confidence, ambiguous-spec,
-                                     dimension-estimated, missing-manufacturer-pn
-  reference_entry        (boolean) — true if this row comes from a type reference table; omit or false otherwise
 
 RULES
 - Do not invent part numbers or quantities
 - Set confidence < 0.70 and add needs-review for anything ambiguous
-- If no items are identifiable, return []`
+- If no items are identifiable, call extract_bom with an empty rows array`
 
-	reqBody := struct {
-		Model     string `json:"model"`
-		MaxTokens int    `json:"max_tokens"`
-		System    string `json:"system"`
-		Messages  []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		} `json:"messages"`
-	}{
-		Model:     anthropicModel,
-		MaxTokens: 16000,
-		System:    system,
-		Messages: []struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
-		}{
-			{Role: "user", Content: "Drawing text:\n\n" + drawingText},
+	// Tool schema — every field matches llmRow so the decoded input can be
+	// marshalled back to JSON and fed directly into parseBOMRows.
+	tool := map[string]any{
+		"name":        "extract_bom",
+		"description": "Return the complete Bill of Materials extracted from the drawing.",
+		"input_schema": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"rows": map[string]any{
+					"type":        "array",
+					"description": "One element per BOM line item. Empty array if no items found.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"rawLabel":               map[string]any{"type": "string", "description": "Label as it appears on the drawing"},
+							"description":            map[string]any{"type": "string", "description": "Clear engineering description including key spec"},
+							"rawQuantity":            map[string]any{"type": "string", "description": "Quantity EXACTLY as written on the drawing; never transform"},
+							"unit":                   map[string]any{"type": "string", "description": "Canonical unit: EA for each, M for metres"},
+							"customerPartNumber":     map[string]any{"type": "string", "description": "Empty string for wiring harness drawings"},
+							"manufacturerPartNumber": map[string]any{"type": "string", "description": "From Part Reference table; empty string if absent"},
+							"supplierReference":      map[string]any{"type": "string", "description": "RS or Farnell distributor code if present; empty string otherwise"},
+							"notes":                  map[string]any{"type": "string", "description": "Concise notes; empty string if nothing to flag"},
+							"confidence":             map[string]any{"type": "number", "description": "0.0–1.0"},
+							"flags": map[string]any{
+								"type":  "array",
+								"items": map[string]any{"type": "string"},
+								"description": "Subset of: needs-review, low-confidence, ambiguous-spec, dimension-estimated, missing-manufacturer-pn",
+							},
+							"reference_entry": map[string]any{"type": "boolean", "description": "true if this row comes from a type reference table"},
+						},
+						"required": []string{
+							"rawLabel", "description", "rawQuantity", "unit",
+							"customerPartNumber", "manufacturerPartNumber", "supplierReference",
+							"notes", "confidence", "flags",
+						},
+					},
+				},
+			},
+			"required": []string{"rows"},
+		},
+	}
+
+	reqBody := map[string]any{
+		"model":      anthropicModel,
+		"max_tokens": anthropicMaxTokens,
+		"system":     system,
+		"tools":      []any{tool},
+		// Force the model to call extract_bom — prose output is impossible.
+		"tool_choice": map[string]string{"type": "tool", "name": "extract_bom"},
+		"messages": []map[string]string{
+			{"role": "user", "content": "Drawing text:\n\n" + drawingText},
 		},
 	}
 
@@ -155,9 +177,12 @@ RULES
 		return "", fmt.Errorf("reading response: %w", err)
 	}
 
+	// Parse tool-use response: content blocks have type "tool_use" with an
+	// "input" field containing the already-structured arguments.
 	var ar struct {
 		Content []struct {
-			Text string `json:"text"`
+			Type  string          `json:"type"`
+			Input json.RawMessage `json:"input"`
 		} `json:"content"`
 		Error *struct {
 			Message string `json:"message"`
@@ -169,11 +194,25 @@ RULES
 	if ar.Error != nil {
 		return "", fmt.Errorf("%s", ar.Error.Message)
 	}
-	if len(ar.Content) == 0 || ar.Content[0].Text == "" {
-		return "", fmt.Errorf("empty response from API")
+
+	for _, block := range ar.Content {
+		if block.Type == "tool_use" && block.Input != nil {
+			// block.Input is {"rows": [...]}; extract the array and return as a
+			// JSON string so parseBOMRows can process it unchanged.
+			var wrapper struct {
+				Rows json.RawMessage `json:"rows"`
+			}
+			if err := json.Unmarshal(block.Input, &wrapper); err != nil {
+				return "", fmt.Errorf("decoding tool input: %w", err)
+			}
+			if wrapper.Rows == nil {
+				return "[]", nil
+			}
+			return string(wrapper.Rows), nil
+		}
 	}
 
-	return ar.Content[0].Text, nil
+	return "", fmt.Errorf("no tool_use block in API response")
 }
 
 // llmRow is the JSON shape returned by the LLM.
