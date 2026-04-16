@@ -348,12 +348,10 @@ export default function App() {
   const hasEntries  = entries.size > 0
   const hasResults  = activeEntry?.doc.status === 'done' && (activeEntry.rows.length > 0)
 
-  // Derive a conservative time estimate from completed jobs in this session.
-  const estimatedMs = computeEstimate(
-    [...entries.values()]
-      .filter(e => e.doc.status === 'done' && (e.doc.analysisDurationMs ?? 0) > 0)
-      .map(e => e.doc.analysisDurationMs!)
-  )
+  // Completed jobs used as the basis for per-document time estimates.
+  const completedJobs = [...entries.values()]
+    .filter(e => e.doc.status === 'done' && e.doc.fileSizeBytes > 0 && (e.doc.analysisDurationMs ?? 0) > 0)
+    .map(e => ({ fileSizeBytes: e.doc.fileSizeBytes, analysisDurationMs: e.doc.analysisDurationMs! }))
 
   return (
     <div style={{ fontFamily: font.body, minHeight: '100vh', background: colors.bg, color: colors.text }}>
@@ -407,7 +405,7 @@ export default function App() {
                     key={id}
                     entry={entry}
                     active={id === activeId}
-                    estimatedMs={estimatedMs}
+                    estimatedMs={computeEstimate(completedJobs, entry.doc.fileSizeBytes)}
                     onClick={() => setActiveId(id)}
                     onRemove={() => handleRemove(id)}
                     onRetry={() => runAnalysis(id)}
@@ -432,7 +430,7 @@ export default function App() {
                     </span>
                     <StatusBadge status={activeEntry.doc.status} uploading={activeEntry.uploading} />
                     {activeEntry.doc.status === 'analyzing' && activeEntry.analysisStartedAt !== null && (
-                      <ElapsedTimer startedAt={activeEntry.analysisStartedAt} estimatedMs={estimatedMs} />
+                      <ElapsedTimer startedAt={activeEntry.analysisStartedAt} estimatedMs={computeEstimate(completedJobs, activeEntry.doc.fileSizeBytes)} />
                     )}
                     {activeEntry.doc.status === 'done' && activeEntry.doc.analysisDurationMs != null && activeEntry.doc.analysisDurationMs > 0 && (
                       <span style={{ fontSize: 12, color: colors.textMuted }} title="Analysis took">
@@ -489,7 +487,7 @@ export default function App() {
                     Analyzing drawing…
                     {activeEntry.analysisStartedAt !== null && (
                       <div style={{ marginTop: 8 }}>
-                        <ElapsedTimer startedAt={activeEntry.analysisStartedAt} estimatedMs={estimatedMs} />
+                        <ElapsedTimer startedAt={activeEntry.analysisStartedAt} estimatedMs={computeEstimate(completedJobs, activeEntry.doc.fileSizeBytes)} />
                       </div>
                     )}
                   </EmptyState>
@@ -515,16 +513,21 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(s / 60)}m ${s % 60}s`
 }
 
-// computeEstimate returns a conservative estimated analysis duration in ms.
-// Uses the P75 of historical completed-job durations × 1.25.
-// Falls back to 90s if there is no history.
-export function computeEstimate(durationsMs: number[]): number {
+// computeEstimate returns a conservative estimated analysis duration in ms for
+// a specific document. It derives a P75 ms-per-byte rate from completed jobs
+// and scales it by the target file size, so a file 5× larger than past jobs
+// gets a 5× longer estimate. Falls back to 90s when there is no usable history.
+export function computeEstimate(
+  completedJobs: Array<{ fileSizeBytes: number; analysisDurationMs: number }>,
+  targetFileSizeBytes: number,
+): number {
   const DEFAULT_MS = 90_000
-  const BUFFER = 1.25
-  if (durationsMs.length === 0) return DEFAULT_MS
-  const sorted = [...durationsMs].sort((a, b) => a - b)
-  const p75 = sorted[Math.floor(sorted.length * 0.75)]
-  return Math.round(p75 * BUFFER)
+  const BUFFER = 1.5
+  const valid = completedJobs.filter(j => j.fileSizeBytes > 0 && j.analysisDurationMs > 0)
+  if (valid.length === 0 || targetFileSizeBytes <= 0) return DEFAULT_MS
+  const rates = valid.map(j => j.analysisDurationMs / j.fileSizeBytes).sort((a, b) => a - b)
+  const p75Rate = rates[Math.floor(rates.length * 0.75)]
+  return Math.round(targetFileSizeBytes * p75Rate * BUFFER)
 }
 
 function ElapsedTimer({ startedAt, estimatedMs }: { startedAt: number; estimatedMs?: number }) {
