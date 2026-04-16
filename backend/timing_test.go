@@ -71,6 +71,47 @@ func TestUpload_RecordsFileSizeBytes(t *testing.T) {
 	assert.Equal(t, int64(len(pdfContent)), result.FileSizeBytes, "FileSizeBytes should match actual file size")
 }
 
+func TestAnalyze_ReturnsAcceptedImmediately(t *testing.T) {
+	srv, token := newTimingServer(t)
+
+	doc := &Document{
+		ID:             "doc-async-1",
+		OrganizationID: "org-1",
+		Filename:       "async.pdf",
+		Status:         StatusUploaded,
+		UploadedAt:     time.Now().UTC(),
+		BOMRows:        []BOMRow{},
+		Warnings:       []string{},
+	}
+	srv.store.save(doc)
+
+	err := os.WriteFile(srv.uploadDir+"/doc-async-1.pdf", []byte("%PDF-1.4\n%%EOF"), 0600)
+	require.NoError(t, err)
+
+	req := authedRequest(http.MethodPost, "/api/documents/doc-async-1/analyze", "", token)
+	req.SetPathValue("id", "doc-async-1")
+
+	w := httptest.NewRecorder()
+	srv.analyze(w, req)
+
+	// Must return 202 immediately — not block on the LLM call.
+	assert.Equal(t, http.StatusAccepted, w.Code)
+
+	var returned Document
+	require.NoError(t, json.NewDecoder(w.Body).Decode(&returned))
+	assert.Equal(t, StatusAnalyzing, returned.Status, "doc should be in analyzing state on 202 response")
+
+	// Analysis runs in a goroutine; wait for it to complete.
+	require.Eventually(t, func() bool {
+		d, err := srv.store.get("doc-async-1")
+		return err == nil && d.Status != StatusAnalyzing
+	}, 5*time.Second, 50*time.Millisecond, "analysis goroutine should complete")
+
+	final, _ := srv.store.get("doc-async-1")
+	assert.NotEqual(t, StatusAnalyzing, final.Status)
+	assert.GreaterOrEqual(t, final.AnalysisDurationMs, int64(0))
+}
+
 func TestAnalyze_RecordsAnalysisDurationMs(t *testing.T) {
 	srv, token := newTimingServer(t)
 
@@ -97,11 +138,18 @@ func TestAnalyze_RecordsAnalysisDurationMs(t *testing.T) {
 	w := httptest.NewRecorder()
 	srv.analyze(w, req)
 
-	// Mock analyser runs when no API key is set — should succeed or produce an
-	// unprocessable-entity error, but either way AnalysisDurationMs must be ≥ 0.
-	var result Document
-	if w.Code == http.StatusOK {
-		require.NoError(t, json.NewDecoder(w.Body).Decode(&result))
+	// Analysis is now async — expect 202 Accepted.
+	require.Equal(t, http.StatusAccepted, w.Code, w.Body.String())
+
+	// Wait for the goroutine to finish.
+	require.Eventually(t, func() bool {
+		d, err := srv.store.get("doc-timing-1")
+		return err == nil && d.Status != StatusAnalyzing
+	}, 5*time.Second, 50*time.Millisecond, "analysis goroutine should complete")
+
+	result, err := srv.store.get("doc-timing-1")
+	require.NoError(t, err)
+	if result.Status == StatusDone {
 		assert.GreaterOrEqual(t, result.AnalysisDurationMs, int64(0), "AnalysisDurationMs should be set")
 	}
 }

@@ -20,9 +20,21 @@ export async function uploadDocument(file: File): Promise<Document> {
 }
 
 export async function analyzeDocument(id: string): Promise<Document> {
+  // Kick off async analysis — server returns 202 immediately.
   const res = await fetch(`${BASE}/documents/${id}/analyze`, { method: 'POST' })
   if (!res.ok) throw new Error(await parseError(res))
-  return res.json()
+
+  // Poll until the status leaves "analyzing".
+  const pollIntervalMs = 2000
+  const timeoutMs = 6 * 60 * 1000 // 6 minutes (matches server-side LLM timeout)
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs))
+    const doc = await getDocument(id)
+    if (doc.status === 'done') return doc
+    if (doc.status === 'error') throw new Error(doc.errorMessage ?? 'Analysis failed')
+  }
+  throw new Error('Analysis timed out — the drawing may be too large. Try splitting it into sections.')
 }
 
 export async function getDocument(id: string): Promise<Document> {

@@ -23,6 +23,7 @@ type Document struct {
 	ClonedFromID       string         `json:"clonedFromId,omitempty"`
 	FileSizeBytes      int64          `json:"fileSizeBytes"`
 	AnalysisDurationMs int64          `json:"analysisDurationMs,omitempty"`
+	ErrorMessage       string         `json:"errorMessage,omitempty"`
 }
 
 // ScoreBreakdown holds per-signal contributions to the composite similarity score.

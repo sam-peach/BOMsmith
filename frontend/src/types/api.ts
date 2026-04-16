@@ -34,6 +34,7 @@ export interface Document {
   clonedFromId?: string
   fileSizeBytes: number
   analysisDurationMs?: number
+  errorMessage?: string
 }
 
 export interface ScoreBreakdown {

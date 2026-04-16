@@ -98,6 +98,8 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/documents/{id}/analyze
+// Returns 202 Accepted immediately and runs analysis in a background goroutine.
+// Poll GET /api/documents/{id} until status transitions to "done" or "error".
 func (s *server) analyze(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	doc, err := s.store.get(id)
@@ -116,30 +118,57 @@ func (s *server) analyze(w http.ResponseWriter, r *http.Request) {
 	doc.Status = StatusAnalyzing
 	s.store.save(doc)
 
+	// Capture values needed in the goroutine before the request context is gone.
 	sd := sessionFromContext(r)
-	analysisStart := time.Now()
-	result, err := analyzeDocument(doc, s.apiKey, &orgScopedMappings{repo: s.mappings, orgID: sd.OrgID})
-	analysisDuration := time.Since(analysisStart)
-	if err != nil {
-		log.Printf("analyze: error for %s: %v", doc.ID, err)
-		doc.Status = StatusError
-		s.store.save(doc)
-		s.logError("error", "analysis", err.Error(), doc.Filename)
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
-		return
-	}
+	apiKey := s.apiKey
+	mappings := &orgScopedMappings{repo: s.mappings, orgID: sd.OrgID}
+	filePath := doc.FilePath
+	docID := doc.ID
+	filename := doc.Filename
 
-	for _, warning := range result.Warnings {
-		s.logError("warn", "analysis", warning, doc.Filename)
-	}
+	go func() {
+		// Work from a fresh copy so the goroutine doesn't share state with the handler.
+		d := &Document{
+			ID:             docID,
+			OrganizationID: sd.OrgID,
+			Filename:       filename,
+			FilePath:       filePath,
+			Status:         StatusAnalyzing,
+		}
 
-	log.Printf("analyze: done %s — %d rows, %d warnings, took %dms", doc.ID, len(result.BOMRows), len(result.Warnings), analysisDuration.Milliseconds())
-	doc.BOMRows = result.BOMRows
-	doc.Warnings = result.Warnings
-	doc.Status = StatusDone
-	doc.AnalysisDurationMs = analysisDuration.Milliseconds()
-	s.store.save(doc)
-	writeJSON(w, http.StatusOK, doc)
+		analysisStart := time.Now()
+		result, err := analyzeDocument(d, apiKey, mappings)
+		analysisDuration := time.Since(analysisStart)
+
+		if err != nil {
+			log.Printf("analyze: error for %s: %v", docID, err)
+			// Re-fetch to preserve fields set before analysis (fileSizeBytes etc.)
+			if current, ferr := s.store.get(docID); ferr == nil {
+				current.Status = StatusError
+				current.ErrorMessage = err.Error()
+				s.store.save(current)
+			}
+			s.logError("error", "analysis", err.Error(), filename)
+			return
+		}
+
+		for _, warning := range result.Warnings {
+			s.logError("warn", "analysis", warning, filename)
+		}
+
+		log.Printf("analyze: done %s — %d rows, %d warnings, took %dms",
+			docID, len(result.BOMRows), len(result.Warnings), analysisDuration.Milliseconds())
+
+		if current, ferr := s.store.get(docID); ferr == nil {
+			current.BOMRows = result.BOMRows
+			current.Warnings = result.Warnings
+			current.Status = StatusDone
+			current.AnalysisDurationMs = analysisDuration.Milliseconds()
+			s.store.save(current)
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, doc)
 }
 
 // GET /api/documents/{id}
