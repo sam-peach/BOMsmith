@@ -63,6 +63,7 @@ func main() {
 
 	matchFeedback := &pgMatchFeedbackRepository{db: db}
 	mappings      := &pgMappingRepository{db: db}
+	catalog       := &pgPartCatalogRepository{db: db}
 	userRepo      := &pgUserRepository{db: db}
 	invites       := &pgInviteRepository{db: db}
 	orgSettings   := &pgOrgSettingsRepository{db: db}
@@ -72,6 +73,7 @@ func main() {
 	srv := &server{
 		store:          store,
 		mappings:       mappings,
+		catalog:        catalog,
 		matchFeedback:  matchFeedback,
 		matchThreshold: matchThreshold,
 		sessions:      sessions,

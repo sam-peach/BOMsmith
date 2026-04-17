@@ -90,6 +90,6 @@ func mockAnalysis(ms mappingReader) AnalysisResult {
 	// (parseQuantity, detectSupplier, enrichFromSupplierRef, applyMapping) is applied
 	// identically to the real pipeline.
 	b, _ := json.Marshal(rows)
-	result, warnings, _ := parseBOMRows(string(b), ms)
+	result, warnings, _ := parseBOMRows(string(b), ms, nil)
 	return AnalysisResult{BOMRows: result, Warnings: warnings}
 }

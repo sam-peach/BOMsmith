@@ -1,8 +1,6 @@
 package main
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -10,8 +8,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMappingStore_SaveAndLookup(t *testing.T) {
-	ms := newMappingStoreInMemory()
+func TestMappings_SaveAndLookup(t *testing.T) {
+	ms := newTestMappings()
 
 	m := &Mapping{
 		CustomerPartNumber:     "CUST-001",
@@ -20,122 +18,76 @@ func TestMappingStore_SaveAndLookup(t *testing.T) {
 		Description:            "Test part",
 		Source:                 "manual",
 	}
-	require.NoError(t, ms.save(m))
+	require.NoError(t, ms.save(m, "org-1"))
 
-	got, ok := ms.lookup("CUST-001")
+	got, ok := ms.lookup("CUST-001", "org-1")
 	require.True(t, ok)
 	assert.Equal(t, "SC-001", got.InternalPartNumber)
 	assert.Equal(t, "MPN-001", got.ManufacturerPartNumber)
 }
 
-func TestMappingStore_LookupCaseInsensitive(t *testing.T) {
-	ms := newMappingStoreInMemory()
-	require.NoError(t, ms.save(&Mapping{CustomerPartNumber: "cust-001", InternalPartNumber: "SC-001"}))
+func TestMappings_LookupCaseInsensitive(t *testing.T) {
+	ms := newTestMappings()
+	require.NoError(t, ms.save(&Mapping{CustomerPartNumber: "cust-001", InternalPartNumber: "SC-001"}, "org-1"))
 
-	_, ok := ms.lookup("CUST-001")
+	_, ok := ms.lookup("CUST-001", "org-1")
 	assert.True(t, ok)
 
-	_, ok = ms.lookup("Cust-001")
+	_, ok = ms.lookup("Cust-001", "org-1")
 	assert.True(t, ok)
 }
 
-func TestMappingStore_LookupMiss(t *testing.T) {
-	ms := newMappingStoreInMemory()
-	_, ok := ms.lookup("MISSING")
+func TestMappings_LookupMiss(t *testing.T) {
+	ms := newTestMappings()
+	_, ok := ms.lookup("MISSING", "org-1")
 	assert.False(t, ok)
 }
 
-func TestMappingStore_LookupEmptyKey(t *testing.T) {
-	ms := newMappingStoreInMemory()
-	_, ok := ms.lookup("")
+func TestMappings_LookupEmptyKey(t *testing.T) {
+	ms := newTestMappings()
+	_, ok := ms.lookup("", "org-1")
 	assert.False(t, ok)
 }
 
-func TestMappingStore_SaveAssignsID(t *testing.T) {
-	ms := newMappingStoreInMemory()
+func TestMappings_SaveAssignsID(t *testing.T) {
+	ms := newTestMappings()
 	m := &Mapping{CustomerPartNumber: "CUST-001"}
-	require.NoError(t, ms.save(m))
-
+	require.NoError(t, ms.save(m, "org-1"))
 	assert.NotEmpty(t, m.ID)
 }
 
-func TestMappingStore_SaveSetsTimestamps(t *testing.T) {
+func TestMappings_SaveSetsTimestamps(t *testing.T) {
 	before := time.Now()
-	ms := newMappingStoreInMemory()
+	ms := newTestMappings()
 	m := &Mapping{CustomerPartNumber: "CUST-001"}
-	require.NoError(t, ms.save(m))
-
+	require.NoError(t, ms.save(m, "org-1"))
 	assert.True(t, m.CreatedAt.After(before) || m.CreatedAt.Equal(before))
 	assert.True(t, m.UpdatedAt.After(before) || m.UpdatedAt.Equal(before))
 }
 
-func TestMappingStore_UpdatePreservesCreatedAt(t *testing.T) {
-	ms := newMappingStoreInMemory()
+func TestMappings_UpdatePreservesCreatedAt(t *testing.T) {
+	ms := newTestMappings()
 	m := &Mapping{CustomerPartNumber: "CUST-001", InternalPartNumber: "SC-001"}
-	require.NoError(t, ms.save(m))
+	require.NoError(t, ms.save(m, "org-1"))
 	created := m.CreatedAt
 
-	// Update the same key.
 	m2 := &Mapping{CustomerPartNumber: "CUST-001", InternalPartNumber: "SC-002"}
-	require.NoError(t, ms.save(m2))
+	require.NoError(t, ms.save(m2, "org-1"))
 
-	got, _ := ms.lookup("CUST-001")
+	got, _ := ms.lookup("CUST-001", "org-1")
 	assert.Equal(t, created, got.CreatedAt, "CreatedAt must not change on update")
 	assert.Equal(t, "SC-002", got.InternalPartNumber)
 }
 
-func TestMappingStore_SaveRequiresCustomerPartNumber(t *testing.T) {
-	ms := newMappingStoreInMemory()
-	err := ms.save(&Mapping{CustomerPartNumber: ""})
+func TestMappings_SaveRequiresCustomerPartNumber(t *testing.T) {
+	ms := newTestMappings()
+	err := ms.save(&Mapping{CustomerPartNumber: ""}, "org-1")
 	assert.Error(t, err)
 }
 
-func TestMappingStore_All(t *testing.T) {
-	ms := newMappingStoreInMemory()
-	require.NoError(t, ms.save(&Mapping{CustomerPartNumber: "CUST-001"}))
-	require.NoError(t, ms.save(&Mapping{CustomerPartNumber: "CUST-002"}))
-
-	all := ms.all()
-	assert.Len(t, all, 2)
-}
-
-func TestMappingStore_Persistence(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "mappings.json")
-
-	// Write via one store instance.
-	ms1, err := newMappingStore(path)
-	require.NoError(t, err)
-	require.NoError(t, ms1.save(&Mapping{
-		CustomerPartNumber:     "CUST-001",
-		InternalPartNumber:     "SC-001",
-		ManufacturerPartNumber: "MPN-001",
-	}))
-
-	// Read it back via a fresh instance.
-	ms2, err := newMappingStore(path)
-	require.NoError(t, err)
-
-	got, ok := ms2.lookup("CUST-001")
-	require.True(t, ok)
-	assert.Equal(t, "SC-001", got.InternalPartNumber)
-	assert.Equal(t, "MPN-001", got.ManufacturerPartNumber)
-}
-
-func TestMappingStore_MissingFileIsNotAnError(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "does-not-exist.json")
-
-	ms, err := newMappingStore(path)
-	require.NoError(t, err)
-	assert.Empty(t, ms.all())
-}
-
-func TestMappingStore_CorruptFileReturnsError(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "mappings.json")
-	require.NoError(t, os.WriteFile(path, []byte("not json {{{"), 0644))
-
-	_, err := newMappingStore(path)
-	assert.Error(t, err)
+func TestMappings_All(t *testing.T) {
+	ms := newTestMappings()
+	require.NoError(t, ms.save(&Mapping{CustomerPartNumber: "CUST-001"}, "org-1"))
+	require.NoError(t, ms.save(&Mapping{CustomerPartNumber: "CUST-002"}, "org-1"))
+	assert.Len(t, ms.all("org-1"), 2)
 }

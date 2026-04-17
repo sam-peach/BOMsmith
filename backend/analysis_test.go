@@ -280,8 +280,8 @@ func TestAppendNote_Append(t *testing.T) {
 // ----------------------------------------------------------------------------
 
 func TestApplyMapping_FillsFields(t *testing.T) {
-	ms := newMappingStoreInMemory()
-	_ = ms.save(&Mapping{
+	ms := newTestMappingReader()
+	ms.add(&Mapping{
 		CustomerPartNumber:     "CUST-CT-01",
 		InternalPartNumber:     "SC-001",
 		ManufacturerPartNumber: "MPN-001",
@@ -297,8 +297,8 @@ func TestApplyMapping_FillsFields(t *testing.T) {
 }
 
 func TestApplyMapping_CaseInsensitive(t *testing.T) {
-	ms := newMappingStoreInMemory()
-	_ = ms.save(&Mapping{CustomerPartNumber: "cust-ct-01", InternalPartNumber: "SC-001"})
+	ms := newTestMappingReader()
+	ms.add(&Mapping{CustomerPartNumber: "cust-ct-01", InternalPartNumber: "SC-001"})
 
 	row := &BOMRow{CustomerPartNumber: "CUST-CT-01"}
 	applyMapping(row, ms)
@@ -307,7 +307,7 @@ func TestApplyMapping_CaseInsensitive(t *testing.T) {
 }
 
 func TestApplyMapping_NoMatch(t *testing.T) {
-	ms := newMappingStoreInMemory()
+	ms := newTestMappingReader()
 	row := &BOMRow{CustomerPartNumber: "UNKNOWN"}
 	applyMapping(row, ms)
 
@@ -316,8 +316,8 @@ func TestApplyMapping_NoMatch(t *testing.T) {
 }
 
 func TestApplyMapping_DoesNotOverwriteExisting(t *testing.T) {
-	ms := newMappingStoreInMemory()
-	_ = ms.save(&Mapping{CustomerPartNumber: "CUST-CT-01", InternalPartNumber: "SC-001"})
+	ms := newTestMappingReader()
+	ms.add(&Mapping{CustomerPartNumber: "CUST-CT-01", InternalPartNumber: "SC-001"})
 
 	row := &BOMRow{
 		CustomerPartNumber: "CUST-CT-01",
@@ -326,11 +326,6 @@ func TestApplyMapping_DoesNotOverwriteExisting(t *testing.T) {
 	applyMapping(row, ms)
 
 	assert.Equal(t, "SC-ALREADY-SET", row.InternalPartNumber, "existing internal PN must not be overwritten")
-}
-
-// newMappingStoreInMemory creates an in-memory store with no file backing — for tests only.
-func newMappingStoreInMemory() *mappingStore {
-	return &mappingStore{data: make(map[string]*Mapping), filePath: ""}
 }
 
 // ----------------------------------------------------------------------------
@@ -400,9 +395,8 @@ func TestNormaliseToMetres_NilValue_Unchanged(t *testing.T) {
 // ----------------------------------------------------------------------------
 
 func TestApplyMapping_FallsBackToMPNWhenNoCPN(t *testing.T) {
-	ms := newMappingStoreInMemory()
-	// Mapping stored with the MPN as the key (CustomerPartNumber field).
-	_ = ms.save(&Mapping{
+	ms := newTestMappingReader()
+	ms.add(&Mapping{
 		CustomerPartNumber: "43031-0007",
 		InternalPartNumber: "W-INTERNAL",
 	})
@@ -418,7 +412,7 @@ func TestApplyMapping_FallsBackToMPNWhenNoCPN(t *testing.T) {
 }
 
 func TestApplyMapping_SkipsWhenBothCPNAndMPNEmpty(t *testing.T) {
-	ms := newMappingStoreInMemory()
+	ms := newTestMappingReader()
 	row := &BOMRow{CustomerPartNumber: "", ManufacturerPartNumber: ""}
 	applyMapping(row, ms)
 
@@ -436,7 +430,7 @@ func TestParseBOMRows_TruncatedJSON_RecoverCompleteRows(t *testing.T) {
   {"rawLabel":"Item 1","description":"Red wire","rawQuantity":"2","unit":"M","customerPartNumber":"","manufacturerPartNumber":"MPN-1","supplierReference":"","notes":"","confidence":0.9,"flags":[]},
   {"rawLabel":"Item 2","description":"Connector","rawQuantity":"1","unit":"EA","customerPartNumber":"","manufacturerPartNumber":"MPN-2","supplierReference":"","notes":"","confide`
 
-	rows, warnings, err := parseBOMRows(truncated, nil)
+	rows, warnings, err := parseBOMRows(truncated, nil, nil)
 
 	require.NoError(t, err, "truncated response should not return an error")
 	require.Len(t, rows, 1, "should recover the one complete row")
@@ -449,7 +443,7 @@ func TestParseBOMRows_TruncatedJSON_NoCompleteRows(t *testing.T) {
 	// Response cut off before any complete object.
 	truncated := `[{"rawLabel":"Item 1","description":"Cut off mid`
 
-	_, _, err := parseBOMRows(truncated, nil)
+	_, _, err := parseBOMRows(truncated, nil, nil)
 
 	assert.Error(t, err, "no recoverable rows should still error")
 }
@@ -457,7 +451,7 @@ func TestParseBOMRows_TruncatedJSON_NoCompleteRows(t *testing.T) {
 func TestParseBOMRows_ValidJSON_UnaffectedByRecoveryLogic(t *testing.T) {
 	valid := `[{"rawLabel":"W1","description":"Black wire","rawQuantity":"3","unit":"M","customerPartNumber":"","manufacturerPartNumber":"MPN-3","supplierReference":"","notes":"","confidence":0.95,"flags":[]}]`
 
-	rows, warnings, err := parseBOMRows(valid, nil)
+	rows, warnings, err := parseBOMRows(valid, nil, nil)
 
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
@@ -475,7 +469,7 @@ func TestParseBOMRows_ReferenceEntry_IsFiltered(t *testing.T) {
 		{"rawLabel":"HS1","description":"Polyolefin Heatshrink 3:1 3mm bore","rawQuantity":"","unit":"","customerPartNumber":"","manufacturerPartNumber":"","supplierReference":"","notes":"","confidence":0.9,"flags":[],"reference_entry":true}
 	]`
 
-	rows, _, err := parseBOMRows(input, nil)
+	rows, _, err := parseBOMRows(input, nil, nil)
 
 	require.NoError(t, err)
 	require.Len(t, rows, 1, "reference_entry rows must be filtered out")
@@ -489,7 +483,7 @@ func TestParseBOMRows_ReferenceEntry_AllFiltered_ReturnsNoRowsWarning(t *testing
 		{"rawLabel":"SL1","description":"Expandable Sleeve","rawQuantity":"","unit":"","customerPartNumber":"","manufacturerPartNumber":"","supplierReference":"","notes":"","confidence":0.9,"flags":[],"reference_entry":true}
 	]`
 
-	rows, warnings, err := parseBOMRows(input, nil)
+	rows, warnings, err := parseBOMRows(input, nil, nil)
 
 	require.NoError(t, err)
 	assert.Empty(t, rows)
@@ -501,7 +495,7 @@ func TestParseBOMRows_ReferenceEntryFalse_IsIncluded(t *testing.T) {
 	// reference_entry: false (explicit) should still be included.
 	input := `[{"rawLabel":"1","description":"Blue wire","rawQuantity":"1","unit":"M","customerPartNumber":"","manufacturerPartNumber":"W-BLUE","supplierReference":"","notes":"","confidence":0.9,"flags":[],"reference_entry":false}]`
 
-	rows, _, err := parseBOMRows(input, nil)
+	rows, _, err := parseBOMRows(input, nil, nil)
 
 	require.NoError(t, err)
 	require.Len(t, rows, 1)

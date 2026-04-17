@@ -5,44 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sync"
-	"time"
 )
 
 // matchFeedbackRepository records user accept/reject decisions on similarity candidates.
 type matchFeedbackRepository interface {
 	record(fb *MatchFeedback, orgID string) error
-}
-
-// ── memMatchFeedbackRepository ────────────────────────────────────────────────
-
-type memMatchFeedbackRepository struct {
-	mu      sync.Mutex
-	entries map[string][]*MatchFeedback // keyed by orgID
-}
-
-func newMemMatchFeedbackRepository() *memMatchFeedbackRepository {
-	return &memMatchFeedbackRepository{entries: make(map[string][]*MatchFeedback)}
-}
-
-func (r *memMatchFeedbackRepository) record(fb *MatchFeedback, orgID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if fb.ID == "" {
-		fb.ID = newID()
-	}
-	fb.OrganizationID = orgID
-	if fb.CreatedAt.IsZero() {
-		fb.CreatedAt = time.Now().UTC()
-	}
-	r.entries[orgID] = append(r.entries[orgID], fb)
-	return nil
-}
-
-func (r *memMatchFeedbackRepository) all(orgID string) []*MatchFeedback {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.entries[orgID]
 }
 
 // ── pgMatchFeedbackRepository ─────────────────────────────────────────────────

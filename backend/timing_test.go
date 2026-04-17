@@ -21,10 +21,10 @@ func newTimingServer(t *testing.T) (*server, string) {
 	ss := newSessionStore(time.Hour)
 	token := ss.create("user-1", "org-1")
 	srv := &server{
-		store:         newStore(),
+		store:         newTestStore(),
 		sessions:      ss,
-		mappings:      &inMemoryMappingRepository{store: &mappingStore{data: make(map[string]*Mapping), filePath: ""}},
-		matchFeedback: newMemMatchFeedbackRepository(),
+		mappings:      newTestMappings(),
+		matchFeedback: newTestMatchFeedback(),
 		uploadDir:     uploadDir,
 		userRepo: &memUserRepository{
 			users: map[string]*User{

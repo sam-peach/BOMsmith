@@ -2,6 +2,45 @@ package main
 
 import "time"
 
+// PartFingerprint holds structured attributes extracted from a part description.
+// All fields are lowercase-normalised. Empty string means attribute not detected.
+type PartFingerprint struct {
+	Type     string `json:"type,omitempty"`     // "wire" | "connector" | "heatshrink" | ...
+	Material string `json:"material,omitempty"` // "pvc" | "ptfe" | "xlpe" | ...
+	Standard string `json:"standard,omitempty"` // "bs4808" | "ul1015" | ...
+	Diameter string `json:"diameter,omitempty"` // "0.20mm" | "0.50mm²" | "16awg"
+	Color    string `json:"color,omitempty"`    // "blue" | "red" | ...
+}
+
+// CatalogPart is a canonical part entry in the organisation's part library.
+// It is distinct from Mapping: Mapping is keyed by customer part number and
+// handles exact lookups; CatalogPart enables fingerprint/description-based
+// matching for parts that have no customer part number.
+type CatalogPart struct {
+	ID                     string          `json:"id"`
+	OrganizationID         string          `json:"-"`
+	InternalPartNumber     string          `json:"internalPartNumber"`
+	ManufacturerPartNumber string          `json:"manufacturerPartNumber"`
+	Description            string          `json:"description"`
+	Fingerprint            PartFingerprint `json:"fingerprint"`
+	UsageCount             int             `json:"usageCount"`
+	LastUsedAt             time.Time       `json:"lastUsedAt"`
+	CreatedAt              time.Time       `json:"createdAt"`
+	UpdatedAt              time.Time       `json:"updatedAt"`
+}
+
+// PartSuggestion is a scored match from the part catalog for a BOM row.
+// It is populated during analysis when no exact mapping exists and a
+// catalog entry scores above the suggestion threshold.
+type PartSuggestion struct {
+	CatalogPartID          string   `json:"catalogPartId"`
+	InternalPartNumber     string   `json:"internalPartNumber"`
+	ManufacturerPartNumber string   `json:"manufacturerPartNumber,omitempty"`
+	Score                  float64  `json:"score"`
+	Source                 string   `json:"source"` // "exact_mpn" | "fingerprint"
+	MatchReasons           []string `json:"matchReasons"`
+}
+
 type DocumentStatus string
 
 const (
@@ -79,9 +118,10 @@ type BOMRow struct {
 	ManufacturerPartNumber string   `json:"manufacturerPartNumber"`
 	SupplierReference      string   `json:"supplierReference"`
 	Supplier               string   `json:"supplier"` // "RS" | "Farnell" | "Unknown" | ""
-	Notes                  string   `json:"notes"`
-	Confidence             float64  `json:"confidence"` // 0.0–1.0
-	Flags                  []string `json:"flags"`
+	Notes                  string          `json:"notes"`
+	Confidence             float64         `json:"confidence"` // 0.0–1.0
+	Flags                  []string        `json:"flags"`
+	Suggestion             *PartSuggestion `json:"suggestion,omitempty"`
 }
 
 type Organization struct {

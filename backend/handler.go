@@ -19,6 +19,7 @@ import (
 type server struct {
 	store          documentRepository
 	mappings       mappingRepository
+	catalog        partCatalogRepository
 	sessions       sessionRepository
 	uploadDir      string
 	apiKey         string
@@ -122,6 +123,10 @@ func (s *server) analyze(w http.ResponseWriter, r *http.Request) {
 	sd := sessionFromContext(r)
 	apiKey := s.apiKey
 	mappings := &orgScopedMappings{repo: s.mappings, orgID: sd.OrgID}
+	var catalog partCatalogReader
+	if s.catalog != nil {
+		catalog = &orgScopedCatalog{repo: s.catalog, orgID: sd.OrgID}
+	}
 	filePath := doc.FilePath
 	docID := doc.ID
 	filename := doc.Filename
@@ -137,7 +142,7 @@ func (s *server) analyze(w http.ResponseWriter, r *http.Request) {
 		}
 
 		analysisStart := time.Now()
-		result, err := analyzeDocument(d, apiKey, mappings)
+		result, err := analyzeDocument(d, apiKey, mappings, catalog)
 		analysisDuration := time.Since(analysisStart)
 
 		if err != nil {
@@ -448,6 +453,10 @@ func (s *server) saveBOM(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.mappings.save(m, sd.OrgID); err != nil {
 			log.Printf("auto-learn mapping save error for %q: %v", cpn, err)
+			continue
+		}
+		if s.catalog != nil {
+			go upsertCatalogFromMapping(m, s.catalog, sd.OrgID)
 		}
 	}
 
@@ -475,6 +484,9 @@ func (s *server) saveMapping(w http.ResponseWriter, r *http.Request) {
 	if err := s.mappings.save(&m, sd.OrgID); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if s.catalog != nil {
+		go upsertCatalogFromMapping(&m, s.catalog, sd.OrgID)
 	}
 	log.Printf("mapping saved: %s → internal=%s mfr=%s", m.CustomerPartNumber, m.InternalPartNumber, m.ManufacturerPartNumber)
 	writeJSON(w, http.StatusOK, &m)

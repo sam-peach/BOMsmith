@@ -13,19 +13,21 @@
 
 - **Backend:** Go 1.24, standard library only (no frameworks), `testify` for assertions
 - **Frontend:** React + TypeScript, Vite, no UI framework
-- **Storage:** in-process memory (`documentStore`) + JSON file (`mappings.json`)
+- **Storage:** PostgreSQL (required; all state — documents, mappings, part catalog, sessions)
 - **Analysis:** Anthropic Claude API; falls back to `mockAnalysis()` when no API key
 
 ## 3. Project layout
 
 ```
 backend/
-  types.go        — shared structs (Document, BOMRow, Quantity, Mapping)
+  types.go        — shared structs (Document, BOMRow, Quantity, Mapping, CatalogPart, PartFingerprint)
   analysis.go     — LLM call + post-processing pipeline
+  fingerprint.go  — part attribute extraction from descriptions
+  catalog.go      — part catalog: scoring, suggestion pipeline, pg repository
   mock.go         — mock analysis for dev/test (no API key required)
-  mappings.go     — mapping store with JSON persistence
+  mappings.go     — mapping repository (pg-backed)
   handler.go      — HTTP handlers
-  store.go        — in-memory document store
+  store.go        — document repository interface + pg implementation
   extract.go      — PDF text extraction
   main.go         — server wiring
 

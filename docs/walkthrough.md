@@ -38,10 +38,9 @@ This document explains how Praxis works end-to-end: from a user uploading a PDF 
 │  Public routes:   GET /healthz   POST /api/auth/login           │
 │  Protected:       all other /api/* routes                       │
 │                                                                 │
-│  ┌──────────────────┐  ┌───────────────────┐                   │
-│  │  documentStore   │  │   mappingStore    │                   │
-│  │  (in-memory map) │  │  (memory + JSON)  │                   │
-│  └──────────────────┘  └───────────────────┘                   │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │  PostgreSQL: documents · mappings · part_catalog · …   │   │
+│  └─────────────────────────────────────────────────────────┘   │
 └───────────────────────┬─────────────────────────────────────────┘
                         │  HTTPS POST /v1/messages
                         ▼
@@ -64,11 +63,13 @@ BOMsmith/
 │   ├── auth.go          Session store, login/logout handlers, requireAuth middleware
 │   ├── handler.go       HTTP handlers (upload, analyse, get, exportCSV, saveBOM, mappings)
 │   ├── analysis.go      Full analysis pipeline: PDF → text → LLM → BOMRows
+│   ├── fingerprint.go   Part attribute extraction (type, material, standard, diameter, color)
+│   ├── catalog.go       Part catalog: fingerprint scoring, suggestion pipeline, pg repository
 │   ├── mock.go          Realistic mock BOM for development (no API key needed)
-│   ├── mappings.go      mappingStore: in-memory + JSON-backed part number cross-references
-│   ├── store.go         documentStore: in-memory map of documents
+│   ├── mappings.go      Mapping repository: pg-backed CPN → IPN cross-references
+│   ├── store.go         Document repository interface + pg implementation
 │   ├── extract.go       PDF text extraction via ledongthuc/pdf
-│   ├── types.go         Core structs: Document, BOMRow, Quantity, Mapping, AnalysisResult
+│   ├── types.go         Core structs: Document, BOMRow, Quantity, Mapping, CatalogPart, PartFingerprint
 │   ├── *_test.go        TDD test files
 │   ├── .env.example     Template for local environment variables
 │   └── go.mod / go.sum
@@ -96,7 +97,7 @@ BOMsmith/
 
 ## 3. Authentication
 
-Praxis uses **server-side session tokens** stored in an in-memory map. There are no JWTs or third-party auth providers.
+BOMsmith uses **server-side session tokens** stored in the `sessions` PostgreSQL table. There are no JWTs or third-party auth providers.
 
 ### Session store (`auth.go`)
 
@@ -166,7 +167,7 @@ handler.upload()
   └─ return 201 Document JSON
 ```
 
-The file is stored on the local filesystem (in `./uploads/`) and the document metadata lives in the in-memory `documentStore`. The server generates a UUID for each document using `crypto/rand`.
+The file is stored on the local filesystem (in `./uploads/`) and the document metadata is persisted to PostgreSQL via `pgDocumentStore`. The server generates a UUID for each document using `crypto/rand`.
 
 ### Step 2 — Analyse (`POST /api/documents/{id}/analyze`)
 
@@ -236,7 +237,7 @@ The prompt instructs the model to output a **single JSON array** with no markdow
 
 ### Stage 3 — Post-processing (`parseBOMRows`)
 
-After JSON parsing, every row goes through a four-step pipeline:
+After JSON parsing, every row goes through a five-step pipeline:
 
 #### a) `parseQuantity(rawStr, declaredUnit)`
 
@@ -260,9 +261,23 @@ If a supplier reference exists but no manufacturer part number was found, a plac
 
 > **Future work:** Replace with a real RS/Farnell API lookup.
 
-#### d) `applyMapping(row, mappingStore)`
+#### d) `applyMapping(row, mappingReader)`
 
-Checks `mappingStore` for a known cross-reference keyed on `customerPartNumber` (case-insensitive). If found, fills in `InternalPartNumber` and/or `ManufacturerPartNumber` from the stored mapping. `LastUsedAt` is updated asynchronously (fire-and-forget goroutine).
+Checks the mappings table for a known cross-reference keyed on `customerPartNumber` (or `manufacturerPartNumber` when CPN is absent), case-insensitive. If found, fills in `InternalPartNumber` and/or `ManufacturerPartNumber` from the stored mapping. `LastUsedAt` is updated asynchronously (fire-and-forget goroutine).
+
+#### e) `suggestFromCatalog(row, catalog)` — only runs when `InternalPartNumber` is still empty
+
+Queries the part catalog for a match in two stages:
+
+1. **Exact MPN** — if `ManufacturerPartNumber` is set, looks for a catalog entry with that MPN. Score 1.0; IPN is auto-applied.
+2. **Fingerprint match** — `buildFingerprint(description)` extracts structured attributes (type, material, standard, diameter, color) using rule-based regexps. Candidates of the same part type are fetched and scored with `scoreFingerprint`. Type and diameter mismatches are fatal (return 0); standard, color, material mismatches reduce the score but do not eliminate the candidate. Only attributes present on **both** sides are scored.
+
+Score thresholds:
+- `≥ 0.90` — auto-accept: IPN filled, `catalog_match` flag added, no suggestion shown.
+- `0.50–0.89` — `BOMRow.Suggestion` populated; frontend shows accept/reject UI (Phase 2).
+- `< 0.50` — no suggestion.
+
+The catalog is populated whenever a mapping is saved (`POST /api/mappings` or auto-learn in `PUT /api/documents/{id}/bom`).
 
 #### Final flag promotion
 
@@ -304,19 +319,20 @@ Document
 
 ```
 BOMRow
-  ID                      string     — "row-N" (sequential, reset on each analysis)
+  ID                      string          — "row-N" (sequential, reset on each analysis)
   LineNumber              int
-  RawLabel                string     — verbatim from drawing
+  RawLabel                string          — verbatim from drawing
   Description             string
   Quantity                Quantity
   CustomerPartNumber      string
-  InternalPartNumber      string     — filled by mappingStore or user edit
+  InternalPartNumber      string          — filled by mapping, catalog auto-accept, or user edit
   ManufacturerPartNumber  string
-  SupplierReference       string     — RS/Farnell order code
-  Supplier                string     — "RS" | "Farnell" | "Unknown" | ""
+  SupplierReference       string          — RS/Farnell order code
+  Supplier                string          — "RS" | "Farnell" | "Unknown" | ""
   Notes                   string
-  Confidence              float64    — 0.0–1.0
+  Confidence              float64         — 0.0–1.0
   Flags                   []string
+  Suggestion              *PartSuggestion — non-nil when catalog matched at 0.50–0.89 confidence
 ```
 
 ### `Quantity` (types.go)
@@ -348,21 +364,58 @@ Mapping
   UpdatedAt               time.Time
 ```
 
+### `CatalogPart` (types.go)
+
+Canonical part entry used by the fingerprint-based suggestion engine. Distinct from `Mapping`: mappings are keyed by customer part number; catalog parts are matched by structured attributes derived from the description.
+
+```
+CatalogPart
+  ID                      string
+  InternalPartNumber      string          — canonical IPN for this part
+  ManufacturerPartNumber  string
+  Description             string
+  Fingerprint             PartFingerprint — structured attributes
+  UsageCount              int             — incremented on each successful match
+  LastUsedAt              time.Time
+  CreatedAt / UpdatedAt   time.Time
+```
+
+### `PartFingerprint` (types.go)
+
+Extracted by `buildFingerprint(description string)` in `fingerprint.go`. All fields lowercase. Empty string = attribute not detected.
+
+```
+PartFingerprint
+  Type      string   — "wire" | "connector" | "heatshrink" | "ferrule" | "fuse" | ...
+  Material  string   — "pvc" | "ptfe" | "xlpe" | "silicone" | "lszh" | ...
+  Standard  string   — "bs4808" | "ul1015" | "iec60228" | ...
+  Diameter  string   — "0.20mm" | "0.50mm²" | "16awg"
+  Color     string   — "blue" | "red" | "black" | ...
+```
+
+### `PartSuggestion` (types.go)
+
+Attached to `BOMRow.Suggestion` when the catalog matched at medium confidence (0.50–0.89). Auto-accepted matches (≥0.90) fill `InternalPartNumber` directly and do not set this field.
+
+```
+PartSuggestion
+  CatalogPartID          string
+  InternalPartNumber     string
+  ManufacturerPartNumber string
+  Score                  float64   — 0.0–1.0
+  Source                 string    — "exact_mpn" | "fingerprint"
+  MatchReasons           []string  — human-readable attribute matches
+```
+
 ---
 
 ## 7. Mapping system
 
 The mapping system cross-references a **customer part number** (as it appears on the drawing) with the **internal part number** used in-house and the **manufacturer part number** for procurement.
 
-### Storage (`mappings.go`)
+### Storage
 
-```
-mappingStore
-  data      map[string]*Mapping   keyed by normKey(customerPartNumber) = strings.ToUpper(trimmed)
-  filePath  string                path to mappings.json
-```
-
-All reads use a `sync.RWMutex`. Writes call `persist()` which writes to a `.tmp` file and renames it atomically — protecting against corruption from a mid-write crash.
+Mappings are persisted in the `mappings` PostgreSQL table, keyed by `(organization_id, customer_part_number)` where `customer_part_number` is stored upper-cased. All lookups normalise the key with `normKey()` before querying.
 
 ### Creating a mapping
 
@@ -374,13 +427,19 @@ There are two paths:
 
 ### Applying a mapping
 
-During `parseBOMRows`, `applyMapping` looks up each row's `customerPartNumber`. If a match exists:
+During `parseBOMRows`, `applyMapping` looks up each row's `customerPartNumber` (falling back to `manufacturerPartNumber` when CPN is absent). If a match exists:
 - `InternalPartNumber` is filled (if currently empty)
 - `ManufacturerPartNumber` is filled (if currently empty)
 - The `mapping_applied` flag is added
 - `LastUsedAt` is updated in a background goroutine
 
-Lookup is case-insensitive (`normKey` uppercases the input before lookup).
+Lookup is case-insensitive (`normKey` uppercases the input before querying).
+
+### Part catalog (`catalog.go`)
+
+For rows where no exact mapping is found, a second lookup runs against the `part_catalog` table using `suggestFromCatalog`. See §5e for the full scoring logic.
+
+The catalog is populated automatically whenever a mapping is saved (manual or auto-learn). `upsertCatalogFromMapping` builds a `PartFingerprint` from the mapping's `Description` and upserts a `CatalogPart` record keyed on `internal_part_number`. Over time, the catalog accumulates fingerprints for every known IPN, enabling cross-drawing part matching even for parts with no customer part number.
 
 ---
 
@@ -487,21 +546,19 @@ All API calls are centralised in `client.ts` as typed async functions. Every fun
 
 ## 10. Storage
 
-### Documents — in-memory (`store.go`)
+### PostgreSQL (`store.go`, `mappings.go`, `catalog.go`)
 
-```
-documentStore
-  docs  map[string]*Document   ID → Document pointer
-  mu    sync.RWMutex
-```
+All application state is persisted in PostgreSQL. `DATABASE_URL` is required at startup; the server will not start without it. On startup, `runMigrations` applies any pending SQL migration files from `backend/migrations/` in order.
 
-Documents are stored in memory only. **Restarting the server clears all documents.** Uploaded PDF files persist on disk in `./uploads/` and survive restarts, but the metadata does not. This is intentional for the prototype — documents are transient working artefacts.
+| Table | Purpose |
+|-------|---------|
+| `documents` | Document metadata + BOM rows (stored as JSONB) |
+| `mappings` | CPN → IPN/MPN cross-references |
+| `part_catalog` | Canonical parts with structured fingerprints for fuzzy matching |
+| `sessions` | Server-side session tokens |
+| `organizations` / `users` | Multi-tenancy |
 
-### Mappings — persistent (`mappings.go`)
-
-Mappings are loaded from `data/mappings.json` on startup and written back atomically on every change. This file is not committed (it lives in `backend/data/` which is gitignored) and accumulates across server restarts.
-
-In the Docker container the data directory is at the path set by `DATA_DIR` (defaults to `./data`). Because App Runner does not have persistent storage, **mappings are reset on each deployment**. To persist them across deployments, mount an EFS volume or migrate to a database.
+Uploaded PDF files are stored on the local filesystem in `./uploads/`. On App Runner these are ephemeral (lost on restart); for production use, mount an EFS volume or push files to S3.
 
 ---
 
@@ -588,10 +645,11 @@ The system prompt lives in the `callAnthropic` function in `analysis.go`. Change
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `AUTH_USERNAME` | Yes | — | Login username |
-| `AUTH_PASSWORD` | Yes | — | Login password |
+| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
+| `AUTH_USERNAME` | Yes | — | Seed admin login username |
+| `AUTH_PASSWORD` | Yes | — | Seed admin login password |
 | `ANTHROPIC_API_KEY` | No | — | Omit to use mock data |
 | `PORT` | No | `8080` | HTTP listen port |
-| `DATA_DIR` | No | `./data` | Directory for `mappings.json` |
 | `STATIC_DIR` | No | `./static` | Directory for compiled frontend |
 | `CORS_ORIGIN` | No | `*` | Value for `Access-Control-Allow-Origin` |
+| `MATCH_SCORE_THRESHOLD` | No | `0.15` | Minimum score for similar-document suggestions |

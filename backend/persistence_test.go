@@ -16,10 +16,10 @@ func newPersistenceServer(t *testing.T) (*server, string) {
 	ss := newSessionStore(time.Hour)
 	token := ss.create("user-1", "org-1")
 	srv := &server{
-		store:         newStore(),
+		store:         newTestStore(),
 		sessions:      ss,
-		mappings:      &inMemoryMappingRepository{store: &mappingStore{data: make(map[string]*Mapping), filePath: ""}},
-		matchFeedback: newMemMatchFeedbackRepository(),
+		mappings:      newTestMappings(),
+		matchFeedback: newTestMatchFeedback(),
 		userRepo: &memUserRepository{
 			users: map[string]*User{
 				"admin": {ID: "user-1", OrganizationID: "org-1", Username: "admin"},
@@ -93,7 +93,7 @@ func TestDeleteDocument_NotFound(t *testing.T) {
 }
 
 func TestResetAnalyzing_SetsErrorOnStaleDoc(t *testing.T) {
-	store := newStore()
+	store := newTestStore()
 
 	store.save(&Document{
 		ID: "stale-1", OrganizationID: "org-1", Filename: "s.pdf",

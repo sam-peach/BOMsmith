@@ -101,12 +101,14 @@ This script builds the `linux/amd64` image, pushes it to ECR, and triggers an Ap
 backend/
   auth.go         — session store, login/logout handlers, requireAuth middleware
   analysis.go     — LLM call + post-processing pipeline
+  fingerprint.go  — part attribute extraction (type, material, standard, diameter, color)
+  catalog.go      — part catalog: fingerprint scoring, suggestion pipeline, pg repository
   mock.go         — mock analysis for dev/test (no API key required)
-  mappings.go     — mapping store with JSON persistence
+  mappings.go     — mapping repository (pg-backed CPN → IPN cross-references)
   handler.go      — HTTP handlers, server struct
-  store.go        — in-memory document store
+  store.go        — document repository interface + pg implementation
   extract.go      — PDF text extraction
-  types.go        — shared structs (Document, BOMRow, Quantity, Mapping)
+  types.go        — shared structs (Document, BOMRow, Quantity, Mapping, CatalogPart, PartFingerprint)
   main.go         — server wiring
 
 frontend/src/
@@ -136,10 +138,11 @@ Browser
   ▼
 App Runner  ──→  Go HTTP server  ──→  Anthropic API
                      │
-              ┌──────┴──────┐
-              │             │
-        documentStore  mappingStore
-        (in-memory)    (memory + mappings.json)
+                     ▼
+                 PostgreSQL
+            ┌────────┬─────────────┐
+            │        │             │
+        documents  mappings   part_catalog
 ```
 
 See [docs/walkthrough.md](docs/walkthrough.md) for a full architectural walkthrough.

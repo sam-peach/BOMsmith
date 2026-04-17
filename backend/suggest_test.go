@@ -20,7 +20,7 @@ func newSuggestServer(t *testing.T) (*server, string) {
 		{CustomerPartNumber: "HS-3MM-BLK", Description: "3mm black heatshrink sleeving", InternalPartNumber: "HS-3-B"},
 		{CustomerPartNumber: "FUSE-5A", Description: "5A blade fuse", InternalPartNumber: "F-005A"},
 	}
-	store := &inMemoryMappingRepository{store: &mappingStore{data: make(map[string]*Mapping), filePath: ""}}
+	store := newTestMappings()
 	for _, m := range seeds {
 		_ = store.save(m, "org-1")
 	}
@@ -116,7 +116,7 @@ func TestSuggest_EmptyQuery(t *testing.T) {
 func TestSuggest_LimitRespected(t *testing.T) {
 	srv, token := newSettingsServer(t)
 	// Seed 10 matching mappings.
-	store := &inMemoryMappingRepository{store: &mappingStore{data: make(map[string]*Mapping), filePath: ""}}
+	store := newTestMappings()
 	for i := 0; i < 10; i++ {
 		_ = store.save(&Mapping{
 			CustomerPartNumber: fmt.Sprintf("WIRE-%02d", i),

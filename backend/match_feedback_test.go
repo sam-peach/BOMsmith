@@ -14,7 +14,7 @@ import (
 // ── memMatchFeedbackRepository ────────────────────────────────────────────────
 
 func TestMemMatchFeedback_RecordAccept(t *testing.T) {
-	repo := newMemMatchFeedbackRepository()
+	repo := newTestMatchFeedback()
 	fb := &MatchFeedback{
 		DrawingID:   "doc-1",
 		CandidateID: "doc-2",
@@ -32,7 +32,7 @@ func TestMemMatchFeedback_RecordAccept(t *testing.T) {
 }
 
 func TestMemMatchFeedback_RecordMultiple(t *testing.T) {
-	repo := newMemMatchFeedbackRepository()
+	repo := newTestMatchFeedback()
 	for _, candidateID := range []string{"doc-2", "doc-3", "doc-4"} {
 		_ = repo.record(&MatchFeedback{
 			DrawingID:   "doc-1",
@@ -46,7 +46,7 @@ func TestMemMatchFeedback_RecordMultiple(t *testing.T) {
 }
 
 func TestMemMatchFeedback_OrgIsolation(t *testing.T) {
-	repo := newMemMatchFeedbackRepository()
+	repo := newTestMatchFeedback()
 	_ = repo.record(&MatchFeedback{DrawingID: "doc-1", CandidateID: "doc-2", Action: "accept", Score: 0.5}, "org-1")
 	_ = repo.record(&MatchFeedback{DrawingID: "doc-3", CandidateID: "doc-4", Action: "accept", Score: 0.5}, "org-2")
 
@@ -59,7 +59,7 @@ func TestMemMatchFeedback_OrgIsolation(t *testing.T) {
 }
 
 func TestMemMatchFeedback_RecordStoresBreakdown(t *testing.T) {
-	repo := newMemMatchFeedbackRepository()
+	repo := newTestMatchFeedback()
 	bd := &ScoreBreakdown{Filename: 0.3, CPN: 0.5, MPN: 0.0}
 	_ = repo.record(&MatchFeedback{
 		DrawingID:      "doc-1",

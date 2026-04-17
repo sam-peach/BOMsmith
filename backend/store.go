@@ -5,11 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"sync"
 )
 
 // documentRepository is the storage abstraction for Documents.
-// Implementations: memDocumentStore (dev/test) and pgDocumentStore (production).
 type documentRepository interface {
 	save(doc *Document)
 	get(id string) (*Document, error)
@@ -23,76 +21,6 @@ type documentRepository interface {
 	// resetAnalyzing transitions any analyzing document to error state.
 	// Called at startup to clean up jobs killed by a server restart.
 	resetAnalyzing() error
-}
-
-// ── memDocumentStore ──────────────────────────────────────────────────────────
-
-type memDocumentStore struct {
-	mu   sync.RWMutex
-	docs map[string]*Document
-}
-
-func newStore() documentRepository {
-	return &memDocumentStore{docs: make(map[string]*Document)}
-}
-
-func (s *memDocumentStore) save(doc *Document) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.docs[doc.ID] = doc
-}
-
-func (s *memDocumentStore) get(id string) (*Document, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	doc, ok := s.docs[id]
-	if !ok {
-		return nil, fmt.Errorf("document %q not found", id)
-	}
-	return doc, nil
-}
-
-func (s *memDocumentStore) list(orgID string) ([]*Document, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var out []*Document
-	for _, doc := range s.docs {
-		if doc.OrganizationID == orgID {
-			out = append(out, doc)
-		}
-	}
-	return out, nil
-}
-
-func (s *memDocumentStore) listByOrg(orgID string) ([]*Document, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	var out []*Document
-	for _, doc := range s.docs {
-		if doc.Status == StatusDone && doc.OrganizationID == orgID {
-			out = append(out, doc)
-		}
-	}
-	return out, nil
-}
-
-func (s *memDocumentStore) delete(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.docs, id)
-	return nil
-}
-
-func (s *memDocumentStore) resetAnalyzing() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for _, doc := range s.docs {
-		if doc.Status == StatusAnalyzing {
-			doc.Status = StatusError
-			doc.ErrorMessage = "Analysis was interrupted by a server restart — please re-analyse."
-		}
-	}
-	return nil
 }
 
 // ── pgDocumentStore ───────────────────────────────────────────────────────────

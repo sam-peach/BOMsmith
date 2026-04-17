@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -25,7 +26,8 @@ var anthropicClient = &http.Client{Timeout: 5 * time.Minute}
 
 // analyzeDocument is the pipeline entry point.
 // When apiKey is empty it returns mock data for development/testing.
-func analyzeDocument(doc *Document, apiKey string, ms mappingReader) (AnalysisResult, error) {
+// catalog may be nil — when nil, the catalog suggestion step is skipped.
+func analyzeDocument(doc *Document, apiKey string, ms mappingReader, catalog partCatalogReader) (AnalysisResult, error) {
 	if apiKey == "" {
 		return mockAnalysis(ms), nil
 	}
@@ -41,18 +43,18 @@ func analyzeDocument(doc *Document, apiKey string, ms mappingReader) (AnalysisRe
 		)
 	}
 
-	return interpretText(text, apiKey, ms)
+	return interpretText(text, apiKey, ms, catalog)
 }
 
 // interpretText sends the extracted drawing text to the Anthropic API,
 // parses the response, then post-processes each row.
-func interpretText(text, apiKey string, ms mappingReader) (AnalysisResult, error) {
+func interpretText(text, apiKey string, ms mappingReader, catalog partCatalogReader) (AnalysisResult, error) {
 	raw, err := callAnthropic(text, apiKey)
 	if err != nil {
 		return AnalysisResult{}, fmt.Errorf("Anthropic API: %w", err)
 	}
 
-	rows, warnings, err := parseBOMRows(raw, ms)
+	rows, warnings, err := parseBOMRows(raw, ms, catalog)
 	if err != nil {
 		return AnalysisResult{}, fmt.Errorf("parsing LLM response: %w", err)
 	}
@@ -231,7 +233,8 @@ type llmRow struct {
 }
 
 // parseBOMRows converts the raw LLM text into BOMRows and runs post-processing.
-func parseBOMRows(text string, ms mappingReader) ([]BOMRow, []string, error) {
+// catalog may be nil — when nil, the catalog suggestion step is skipped.
+func parseBOMRows(text string, ms mappingReader, catalog partCatalogReader) ([]BOMRow, []string, error) {
 	text = strings.TrimSpace(text)
 
 	// Strip markdown fences.
@@ -301,6 +304,22 @@ func parseBOMRows(text string, ms mappingReader) ([]BOMRow, []string, error) {
 		detectSupplier(&row)
 		enrichFromSupplierRef(&row)
 		applyMapping(&row, ms)
+
+		// Catalog suggestion: only run when no IPN was resolved by exact mapping.
+		if row.InternalPartNumber == "" {
+			if s, err := suggestFromCatalog(&row, catalog); err != nil {
+				// Non-fatal — log and continue without a suggestion.
+				log.Printf("catalog suggest row %d: %v", i+1, err)
+			} else if s != nil && s.Score >= catalogAutoAcceptThreshold {
+				row.InternalPartNumber = s.InternalPartNumber
+				if row.ManufacturerPartNumber == "" && s.ManufacturerPartNumber != "" {
+					row.ManufacturerPartNumber = s.ManufacturerPartNumber
+				}
+				row.Flags = appendFlag(row.Flags, "catalog_match")
+			} else if s != nil {
+				row.Suggestion = s
+			}
+		}
 
 		if row.ManufacturerPartNumber == "" {
 			row.Flags = appendFlag(row.Flags, "missing_part_number")

@@ -87,7 +87,7 @@ func TestCallAnthropic_ReturnsRowsFromToolInput(t *testing.T) {
 // should still be explicit.
 func TestParseBOMRows_ProseResponseWithNoJSON(t *testing.T) {
 	prose := "I need to carefully parse this complex drawing. Let me work through each section systematically. Part Reference Table items..."
-	_, _, err := parseBOMRows(prose, nil)
+	_, _, err := parseBOMRows(prose, nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no JSON array")
 }

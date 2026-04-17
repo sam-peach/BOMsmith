@@ -60,7 +60,7 @@ func (r *memUserRepository) findOrgByID(orgID string) (*Organization, error) {
 func newAuthServer() *server {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("secret"), bcrypt.MinCost)
 	return &server{
-		store:    newStore(),
+		store:    newTestStore(),
 		sessions: newSessionStore(time.Hour),
 		userRepo: &memUserRepository{
 			users: map[string]*User{
@@ -240,7 +240,7 @@ func TestRequireAuth_InvalidToken(t *testing.T) {
 func TestRequireAuth_ValidToken_InjectsSession(t *testing.T) {
 	ss := newSessionStore(time.Hour)
 	token := ss.create("user-1", "org-1")
-	srv := &server{store: newStore(), sessions: ss}
+	srv := &server{store: newTestStore(), sessions: ss}
 	var gotSD *sessionData
 	handler := srv.requireAuth(func(w http.ResponseWriter, r *http.Request) {
 		gotSD = sessionFromContext(r)
@@ -267,7 +267,7 @@ func TestRequireAuth_ValidToken_InjectsSession(t *testing.T) {
 func TestLogout_ClearsSession(t *testing.T) {
 	ss := newSessionStore(time.Hour)
 	token := ss.create("user-1", "org-1")
-	srv := &server{store: newStore(), sessions: ss}
+	srv := &server{store: newTestStore(), sessions: ss}
 
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/logout", nil)
 	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: token})
