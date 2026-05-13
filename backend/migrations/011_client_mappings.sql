@@ -10,8 +10,10 @@
 ALTER TABLE mappings
     ADD COLUMN client_label TEXT NOT NULL DEFAULT '';
 
+-- IF EXISTS guards against fresh databases where the auto-generated name
+-- may differ, or against re-running on a partially-applied schema.
 ALTER TABLE mappings
-    DROP CONSTRAINT mappings_organization_id_customer_part_number_key;
+    DROP CONSTRAINT IF EXISTS mappings_organization_id_customer_part_number_key;
 
 ALTER TABLE mappings
     ADD CONSTRAINT mappings_org_client_cpn_key

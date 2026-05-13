@@ -108,6 +108,7 @@ func (s *pgDocumentStore) get(id string) (*Document, error) {
 	if err := json.Unmarshal([]byte(warnJSON), &doc.Warnings); err != nil {
 		return nil, fmt.Errorf("pgDocumentStore.get: unmarshal warnings: %w", err)
 	}
+	normaliseBOMRows(doc.BOMRows)
 	if clonedFrom.Valid {
 		doc.ClonedFromID = clonedFrom.String
 	}
@@ -118,6 +119,24 @@ func (s *pgDocumentStore) get(id string) (*Document, error) {
 		doc.ErrorMessage = errorMessage.String
 	}
 	return &doc, nil
+}
+
+// normaliseBOMRows ensures every slice field on every row is non-nil. Documents
+// persisted before the ConfirmedFields field was added have nil for it, which
+// Go marshals as JSON null — and the frontend then errors on .includes() etc.
+// This is cheap and keeps the API contract stable: rows always have arrays.
+func normaliseBOMRows(rows []BOMRow) {
+	for i := range rows {
+		if rows[i].Flags == nil {
+			rows[i].Flags = []string{}
+		}
+		if rows[i].ConfirmedFields == nil {
+			rows[i].ConfirmedFields = []string{}
+		}
+		if rows[i].Quantity.Flags == nil {
+			rows[i].Quantity.Flags = []string{}
+		}
+	}
 }
 
 func (s *pgDocumentStore) listByOrg(orgID string) ([]*Document, error) {
@@ -156,6 +175,7 @@ func (s *pgDocumentStore) listByOrg(orgID string) ([]*Document, error) {
 			log.Printf("pgDocumentStore.listByOrg unmarshal warnings: %v", err)
 			continue
 		}
+		normaliseBOMRows(doc.BOMRows)
 		if clonedFrom.Valid {
 			doc.ClonedFromID = clonedFrom.String
 		}
@@ -206,6 +226,7 @@ func (s *pgDocumentStore) list(orgID string) ([]*Document, error) {
 			log.Printf("pgDocumentStore.list unmarshal warnings: %v", err)
 			continue
 		}
+		normaliseBOMRows(doc.BOMRows)
 		if clonedFrom.Valid {
 			doc.ClonedFromID = clonedFrom.String
 		}

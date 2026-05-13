@@ -321,8 +321,17 @@ func parseBOMRows(text string, ms mappingReader, catalog partCatalogReader) ([]B
 				if s.Source == "exact_mpn" {
 					row.InternalPartNumber = s.InternalPartNumber
 					row.ConfirmedFields = appendConfirmed(row.ConfirmedFields, "internalPartNumber")
+					// Exact-MPN is an identity match on a globally-unique key.
+					// The MPN value that fired it is therefore identity-confirmed
+					// regardless of whether the cell was already populated (by
+					// the LLM extracting from the Part Reference Table) or filled
+					// now from the catalog hit. Otherwise an LLM-extracted MPN
+					// stays as a Suggested cell despite having just been
+					// identity-matched, forcing a redundant operator click.
 					if row.ManufacturerPartNumber == "" && s.ManufacturerPartNumber != "" {
 						row.ManufacturerPartNumber = s.ManufacturerPartNumber
+					}
+					if row.ManufacturerPartNumber != "" {
 						row.ConfirmedFields = appendConfirmed(row.ConfirmedFields, "manufacturerPartNumber")
 					}
 				} else {
@@ -554,7 +563,10 @@ func applyMapping(row *BOMRow, ms mappingReader) {
 	row.Flags = appendFlag(row.Flags, "mapping_applied")
 	row.Notes = appendNote(row.Notes, "Matched from previous mapping")
 
-	go ms.touchLastUsed(row.CustomerPartNumber) // fire-and-forget; non-critical
+	// Fire-and-forget — and explicitly scoped to the bucket that fired the
+	// lookup, otherwise cross-client CPN collisions get their last_used_at
+	// bumped together and wreck the search ranking.
+	go ms.touchLastUsed(row.CustomerPartNumber, m.ClientLabel)
 }
 
 // appendFlag adds f to flags only if not already present.

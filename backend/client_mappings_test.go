@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -256,4 +257,9 @@ func (r *clientScopedFakeReader) lookup(cpn string) (*Mapping, bool) {
 	return nil, false
 }
 
-func (r *clientScopedFakeReader) touchLastUsed(_ string) {}
+func (r *clientScopedFakeReader) touchLastUsed(cpn, clientLabel string) {
+	key := r.store.key(clientLabel, cpn)
+	if m, ok := r.store.data[key]; ok {
+		m.LastUsedAt = time.Now().UTC()
+	}
+}

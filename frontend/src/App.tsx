@@ -13,6 +13,8 @@ import BomTable from './components/BomTable'
 import InvitePage from './components/InvitePage'
 import { LogoWordmark } from './components/Logo'
 import LoginPage from './components/LoginPage'
+import MappingSearch from './components/MappingSearch'
+import MappingsPage from './components/MappingsPage'
 import SettingsPage from './components/SettingsPage'
 import SimilarDrawings from './components/SimilarDrawings'
 import UploadArea from './components/UploadArea'
@@ -62,7 +64,20 @@ export default function App() {
   const [activeId,     setActiveId]     = useState<string | null>(null)
   const [copied,       setCopied]       = useState(false)
   const [exportConfig, setExportConfig] = useState<ExportConfig>({ columns: ['internalPartNumber', 'empty', 'quantity'], includeHeader: false })
-  const [uploadClient, setUploadClient] = useState('')
+  // Last-used client persists across the session so operators processing a
+  // batch of drawings from one customer don't have to re-select it for every
+  // upload. sessionStorage (not localStorage) so the value clears when the
+  // tab closes — protects shared shop-floor workstations from carrying
+  // one operator's last-used client into another operator's session.
+  const [uploadClient, setUploadClient] = useState<string>(() => {
+    try { return sessionStorage.getItem('bomsmith.uploadClient') ?? '' } catch { return '' }
+  })
+  useEffect(() => {
+    try {
+      if (uploadClient) sessionStorage.setItem('bomsmith.uploadClient', uploadClient)
+      else sessionStorage.removeItem('bomsmith.uploadClient')
+    } catch { /* private-mode browsers can throw; non-fatal */ }
+  }, [uploadClient])
   const [clientOptions, setClientOptions] = useState<ClientMappingSummary[]>([])
   const sem = useRef(createSemaphore(ANALYSIS_CONCURRENCY))
 
@@ -154,6 +169,10 @@ export default function App() {
   async function handleLogout() {
     await logout()
     setAuthed(false)
+    // Defensive: clear the per-session client tag so a shared workstation
+    // never carries one user's last-used client into the next login.
+    try { sessionStorage.removeItem('bomsmith.uploadClient') } catch { /* non-fatal */ }
+    setUploadClient('')
   }
 
   // ── Upload + auto-analyze ─────────────────────────────────────────────────
@@ -270,7 +289,11 @@ export default function App() {
   async function handleSaveMapping(
     mapping: Pick<Mapping, 'customerPartNumber' | 'internalPartNumber' | 'manufacturerPartNumber' | 'description' | 'source'>,
   ) {
-    await saveMapping(mapping)
+    // Inject the active document's clientLabel so the mapping lands in the
+    // correct bucket. Without this the upsert routes every manual save into
+    // the generic bucket regardless of the drawing's client tag.
+    const clientLabel = activeEntry?.doc.clientLabel ?? ''
+    await saveMapping({ ...mapping, clientLabel })
   }
 
   function handleRowsChange(id: string, rows: BOMRow[]) {
@@ -368,7 +391,9 @@ export default function App() {
           <button style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer' }} onClick={() => navigate('/')} aria-label="Go to home">
             <LogoWordmark size={28} />
           </button>
+          {authed && <MappingSearch />}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button style={ghostBtn} onClick={() => navigate('/mappings')} title="Browse and edit stored mappings">Mappings</button>
             {isAdmin && (
               <button style={ghostBtn} onClick={() => navigate('/admin')} title="Admin">Admin</button>
             )}
@@ -383,6 +408,7 @@ export default function App() {
       {/* ── Routed content ──────────────────────────────────────────────────── */}
       <Routes>
         <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/mappings" element={<MappingsPage />} />
         {isAdmin && <Route path="/admin" element={<AdminPage />} />}
         <Route path="/" element={
           <main style={mainStyle}>
@@ -502,8 +528,10 @@ export default function App() {
                     {hasResults && (
                       <>
                         {(() => {
-                          const n = activeEntry.rows.reduce((sum, r) =>
-                            sum + CONFIRMABLE_FIELDS.filter(f => r[f] !== '' && !r.confirmedFields.includes(f)).length, 0)
+                          const n = activeEntry.rows.reduce((sum, r) => {
+                            const confirmed = r.confirmedFields ?? []
+                            return sum + CONFIRMABLE_FIELDS.filter(f => r[f] !== '' && !confirmed.includes(f)).length
+                          }, 0)
                           return n > 0 ? (
                             <span title="Cells the system filled in that are still awaiting operator confirmation"
                               style={{ fontSize: 12, color: '#92400e', alignSelf: 'center' }}>

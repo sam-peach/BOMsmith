@@ -274,7 +274,7 @@ Queries the part catalog for a match in two stages:
 
 Match treatment depends on the source:
 
-- **Exact-MPN match** (`s.Source == "exact_mpn"`) is an identity match — the MPN is a globally unique part identifier and every catalog entry traces back to a stored mapping, which itself traces to a human declaration. Treated the same as an `applyMapping` hit: `InternalPartNumber` is filled and `"internalPartNumber"` (plus `"manufacturerPartNumber"` if filled) is added to `ConfirmedFields`.
+- **Exact-MPN match** (`s.Source == "exact_mpn"`) is an identity match — the MPN is a globally unique part identifier and every catalog entry traces back to a stored mapping, which itself traces to a human declaration. Treated the same as an `applyMapping` hit: `InternalPartNumber` is filled and `"internalPartNumber"` is added to `ConfirmedFields`. The MPN cell is also marked Confirmed whenever the row has a value (whether pre-populated by the LLM from the Part Reference Table or filled now from the catalog) — the catalog hit by-definition validates the MPN value, so leaving it as a Suggested cell would force a redundant operator click.
 - **Fingerprint match** (`s.Source == "fingerprint"`) is a similarity match — the system is inferring identity, not confirming it. Attached to `BOMRow.Suggestion` and surfaced for operator review; never fills `InternalPartNumber` silently.
 
 The fail-safe principle is preserved: only humans confirm. The exact-MPN promotion isn't the system confirming itself — it's the system recognising that the value already traces to a prior human declaration via the catalog → mapping chain.
@@ -472,6 +472,22 @@ A stored mapping represents a prior human declaration (manual save, CSV/Excel im
 
 CPN lookup is case-insensitive (`normKey` uppercases the input); client-label matching is case-insensitive + whitespace-trimmed (`normClientLabel`).
 
+`touchLastUsed` is scoped by `(org, client_label, cpn)` — touching one bucket must not bump another's `last_used_at`, otherwise cross-client CPN collisions wreck the search ranking. Search and suggest queries escape LIKE metacharacters (`%`, `_`, `\`) before building the pattern and use `ESCAPE '\'`, so customer P/Ns with underscores (e.g. `CBL_RED_035`) are matched literally.
+
+### On-demand mapping search
+
+Operators can interrogate the mapping store directly via the search bar in the top nav (component: `MappingSearch.tsx`). The frontend calls `GET /api/mappings/search?q=...` which substring-matches across `customer_part_number`, `internal_part_number`, `manufacturer_part_number`, and `description` and returns up to 20 mappings ordered by `last_used_at DESC`. The same MPN under multiple client buckets returns as multiple rows so the operator sees each client's distinct interpretation.
+
+Result rows lead with the **internal P/N** as the headline answer — that's what Andrew uses next (paste into SAP). Customer P/N and Mfr P/N are demoted to the footer. Each P/N value is independently click-to-copy.
+
+Keyboard navigation: ↑/↓ moves the highlight; Enter copies the highlighted row's internal P/N; Esc closes the dropdown. The debounce + a ref-counter guard prevent stale responses from clobbering newer queries.
+
+### Mappings management page
+
+The full maintenance surface lives at `/mappings` (component: `MappingsPage.tsx`). It lists every mapping in the org with free-text search, client filter, and source filter. Inline edit is allowed on `internalPartNumber`, `manufacturerPartNumber`, and `description`; the primary key (`clientLabel` + `customerPartNumber`) is read-only and must be changed via delete-and-recreate. Each row has a Delete button (with a confirmation prompt) that calls `DELETE /api/mappings/{id}`. Edits use the existing `POST /api/mappings` upsert path.
+
+Addresses Andrew's 2026-04-15 request for "some view... to be able to upload current x-ref sheet and make corrections if errors are introduced" — the upload half is the Settings page client-mappings import; this page is the corrections half.
+
 ### Part catalog (`catalog.go`)
 
 For rows where no exact mapping is found, a second lookup runs against the `part_catalog` table using `suggestFromCatalog`. See §5e for the full scoring logic.
@@ -511,8 +527,11 @@ All routes except `/healthz` and `/api/auth/login` require a valid `sme_session`
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/mappings` | List all stored mappings. |
+| `GET` | `/api/mappings/search` | On-demand operator-facing mapping search. Params: `q` (required substring across CPN/IPN/MPN/description, case-insensitive), `client` (optional exact-match bucket filter), `limit` (default 20, max 100). Returns `Mapping[]` ordered by `last_used_at DESC`. Empty/whitespace `q` returns `[]`. |
+| `GET` | `/api/mappings/suggest` | Tight typeahead for the BomTable in-cell `?` popover. Matches description + CPN only. Limit 5. Result rows include `clientLabel` so the popover can disambiguate same-CPN-different-client hits. |
 | `GET` | `/api/mappings/clients` | List distinct client labels in the org with mapping counts. Returns `ClientMappingSummary[]`. |
 | `POST` | `/api/mappings` | Create or update a single mapping. Body: `Mapping`. |
+| `DELETE` | `/api/mappings/{id}` | Remove a stored mapping. Org-scoped. 204 on success, 404 if no match for this org. |
 | `POST` | `/api/mappings/upload` | Bulk import from CSV. Multipart `file` field, optional `clientLabel`. Returns `{"saved":N,"skipped":N}`. |
 | `POST` | `/api/mappings/import` | Structured per-client import (frontend parses Excel client-side). Body: `{"clientLabel":"...","rows":[...]}`. Returns `{"saved":N,"overwritten":N,"skipped":N}`. |
 
@@ -559,6 +578,8 @@ App.tsx state
 | `LoginPage` | Sign-in form; calls `onLogin(username, password)` prop |
 | `UploadArea` | Drag-and-drop or click-to-select PDF; validates `.pdf` extension client-side |
 | `BomTable` | Editable table; each cell is an `<input>`; cell-level visual state for confirmed vs system-suggested cross-reference fields |
+| `MappingSearch` | Top-nav search bar; debounced on-demand mapping lookup with click-to-copy per P/N field |
+| `MappingsPage` | Full mappings management page at `/mappings`; browse / filter / inline-edit / delete |
 | `WarningsPanel` | Dismissible warning banners surfaced from `doc.warnings` |
 
 ### BomTable internals

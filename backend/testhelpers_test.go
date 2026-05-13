@@ -99,12 +99,13 @@ func fakeKey(clientLabel, cpn string) string {
 	return normClientLabel(clientLabel) + "|" + normKey(cpn)
 }
 
-func (r *fakeMappingRepository) save(m *Mapping, _ string) error {
+func (r *fakeMappingRepository) save(m *Mapping, orgID string) error {
 	cpn := normKey(m.CustomerPartNumber)
 	if cpn == "" {
 		return fmt.Errorf("customerPartNumber is required")
 	}
-	key := fakeKey(m.ClientLabel, m.CustomerPartNumber)
+	// Storage key includes org so cross-org isolation is honoured by tests.
+	key := orgID + "|" + fakeKey(m.ClientLabel, m.CustomerPartNumber)
 	now := time.Now().UTC()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -117,6 +118,7 @@ func (r *fakeMappingRepository) save(m *Mapping, _ string) error {
 		}
 		m.CreatedAt = now
 	}
+	m.OrganizationID = orgID
 	m.UpdatedAt = now
 	if m.LastUsedAt.IsZero() {
 		m.LastUsedAt = now
@@ -131,31 +133,37 @@ func (r *fakeMappingRepository) lookup(cpn, orgID string) (*Mapping, bool) {
 	return r.lookupClient(cpn, orgID, "")
 }
 
-func (r *fakeMappingRepository) lookupClient(cpn, _, clientLabel string) (*Mapping, bool) {
+func (r *fakeMappingRepository) lookupClient(cpn, orgID, clientLabel string) (*Mapping, bool) {
 	if normKey(cpn) == "" {
 		return nil, false
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	m, ok := r.data[fakeKey(clientLabel, cpn)]
+	m, ok := r.data[orgID+"|"+fakeKey(clientLabel, cpn)]
 	return m, ok
 }
 
-func (r *fakeMappingRepository) all(_ string) []*Mapping {
+func (r *fakeMappingRepository) all(orgID string) []*Mapping {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	out := make([]*Mapping, 0, len(r.data))
 	for _, m := range r.data {
+		if m.OrganizationID != orgID {
+			continue
+		}
 		out = append(out, m)
 	}
 	return out
 }
 
-func (r *fakeMappingRepository) clients(_ string) []ClientMappingSummary {
+func (r *fakeMappingRepository) clients(orgID string) []ClientMappingSummary {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	counts := map[string]int{}
 	for _, m := range r.data {
+		if m.OrganizationID != orgID {
+			continue
+		}
 		counts[normClientLabel(m.ClientLabel)]++
 	}
 	out := make([]ClientMappingSummary, 0, len(counts))
@@ -165,15 +173,49 @@ func (r *fakeMappingRepository) clients(_ string) []ClientMappingSummary {
 	return out
 }
 
-func (r *fakeMappingRepository) touchLastUsed(cpn, _ string) {
+func (r *fakeMappingRepository) search(query, _, clientFilter string, limit int) []*Mapping {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return []*Mapping{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []*Mapping
+	for _, m := range r.data {
+		if clientFilter != "" && normClientLabel(m.ClientLabel) != normClientLabel(clientFilter) {
+			continue
+		}
+		if strings.Contains(strings.ToLower(m.Description), q) ||
+			strings.Contains(strings.ToLower(m.CustomerPartNumber), q) ||
+			strings.Contains(strings.ToLower(m.InternalPartNumber), q) ||
+			strings.Contains(strings.ToLower(m.ManufacturerPartNumber), q) {
+			out = append(out, m)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out
+}
+
+func (r *fakeMappingRepository) deleteByID(id, orgID string) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// Touch any bucket that has the CPN — touching is fire-and-forget so
-	// being slightly loose here is fine.
 	for k, m := range r.data {
-		if strings.HasSuffix(k, "|"+normKey(cpn)) {
-			m.LastUsedAt = time.Now().UTC()
+		if m.ID == id && m.OrganizationID == orgID {
+			delete(r.data, k)
+			return true, nil
 		}
+	}
+	return false, nil
+}
+
+func (r *fakeMappingRepository) touchLastUsed(cpn, orgID, clientLabel string) {
+	want := orgID + "|" + fakeKey(clientLabel, cpn)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if m, ok := r.data[want]; ok {
+		m.LastUsedAt = time.Now().UTC()
 	}
 }
 
@@ -236,7 +278,7 @@ func (r *fakeMappingReader) lookup(cpn string) (*Mapping, bool) {
 	return m, ok
 }
 
-func (r *fakeMappingReader) touchLastUsed(_ string) {}
+func (r *fakeMappingReader) touchLastUsed(_, _ string) {}
 
 // ── fakeMatchFeedbackRepository ───────────────────────────────────────────────
 

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -499,7 +500,8 @@ func (s *server) saveMapping(w http.ResponseWriter, r *http.Request) {
 	if s.catalog != nil {
 		go upsertCatalogFromMapping(&m, s.catalog, sd.OrgID)
 	}
-	log.Printf("mapping saved: %s → internal=%s mfr=%s", m.CustomerPartNumber, m.InternalPartNumber, m.ManufacturerPartNumber)
+	log.Printf("mapping_save: org=%s client=%q cpn=%s internal=%s mfr=%s source=%s",
+		sd.OrgID, m.ClientLabel, m.CustomerPartNumber, m.InternalPartNumber, m.ManufacturerPartNumber, m.Source)
 	writeJSON(w, http.StatusOK, &m)
 }
 
@@ -513,6 +515,55 @@ func (s *server) suggestMappings(w http.ResponseWriter, r *http.Request) {
 		results = []*Mapping{}
 	}
 	writeJSON(w, http.StatusOK, results)
+}
+
+// GET /api/mappings/search — on-demand operator-facing mapping search.
+// Query params:
+//
+//	q       — required substring; matched against description, customer P/N,
+//	          internal P/N, and manufacturer P/N (case-insensitive).
+//	client  — optional exact-match filter on client label.
+//	limit   — optional, defaults to 20, clamped to [1, 100].
+//
+// Returns []*Mapping ordered by last_used_at descending. Empty/whitespace q
+// returns an empty list (not an error) so the frontend can debounce safely.
+func (s *server) searchMappings(w http.ResponseWriter, r *http.Request) {
+	sd := sessionFromContext(r)
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	client := strings.TrimSpace(r.URL.Query().Get("client"))
+	limit := 20
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+	results := s.mappings.search(q, sd.OrgID, client, limit)
+	if results == nil {
+		results = []*Mapping{}
+	}
+	log.Printf("mapping_search: org=%s client=%q qlen=%d results=%d", sd.OrgID, client, len(q), len(results))
+	writeJSON(w, http.StatusOK, results)
+}
+
+// DELETE /api/mappings/{id} — remove a stored mapping. Org-scoped: a request
+// can only delete mappings owned by the caller's org. Returns 204 on success,
+// 404 if no matching row exists for this org.
+func (s *server) deleteMapping(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	sd := sessionFromContext(r)
+	ok, err := s.mappings.deleteByID(id, sd.OrgID)
+	if err != nil {
+		log.Printf("mapping_delete: org=%s id=%s error=%v", sd.OrgID, id, err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !ok {
+		log.Printf("mapping_delete: org=%s id=%s not_found", sd.OrgID, id)
+		writeError(w, http.StatusNotFound, "mapping not found")
+		return
+	}
+	log.Printf("mapping_delete: org=%s id=%s ok", sd.OrgID, id)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // GET /api/mappings — list all stored mappings.

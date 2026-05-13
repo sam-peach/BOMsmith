@@ -117,8 +117,10 @@ export async function saveBOM(id: string, rows: BOMRow[]): Promise<Document> {
   return res.json()
 }
 
+// clientLabel is required so the upsert lands in the right bucket — omitting
+// it routes every edit into the generic bucket and creates silent duplicates.
 export async function saveMapping(
-  mapping: Pick<Mapping, 'customerPartNumber' | 'internalPartNumber' | 'manufacturerPartNumber' | 'description' | 'source'>,
+  mapping: Pick<Mapping, 'clientLabel' | 'customerPartNumber' | 'internalPartNumber' | 'manufacturerPartNumber' | 'description' | 'source'>,
 ): Promise<Mapping> {
   const res = await fetch(`${BASE}/mappings`, {
     method: 'POST',
@@ -127,6 +129,17 @@ export async function saveMapping(
   })
   if (!res.ok) throw new Error(await parseError(res))
   return res.json()
+}
+
+export async function listAllMappings(): Promise<Mapping[]> {
+  const res = await fetch(`${BASE}/mappings`)
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function deleteMapping(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/mappings/${encodeURIComponent(id)}`, { method: 'DELETE' })
+  if (!res.ok) throw new Error(await parseError(res))
 }
 
 export async function uploadMappingsCSV(file: File): Promise<{ saved: number; skipped: number }> {
@@ -141,6 +154,16 @@ export async function suggestMappings(query: string): Promise<Mapping[]> {
   if (!query.trim()) return []
   const res = await fetch(`${BASE}/mappings/suggest?q=${encodeURIComponent(query)}`)
   if (!res.ok) return []
+  return res.json()
+}
+
+export async function searchMappings(query: string, opts?: { client?: string; limit?: number }): Promise<Mapping[]> {
+  if (!query.trim()) return []
+  const params = new URLSearchParams({ q: query })
+  if (opts?.client) params.set('client', opts.client)
+  if (opts?.limit) params.set('limit', String(opts.limit))
+  const res = await fetch(`${BASE}/mappings/search?${params.toString()}`)
+  if (!res.ok) throw new Error(await parseError(res))
   return res.json()
 }
 

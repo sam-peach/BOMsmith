@@ -69,6 +69,51 @@ body {
   box-shadow: 0 0 0 2px rgba(79, 70, 229, 0.12);
 }
 
+/* ── Copyable values (mapping search results) ─────────────────────────────── */
+
+.copyable {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 11px;
+  color: #18161a;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.copyable:hover {
+  background: #f0effe;
+  border-color: #c7d2fe;
+  color: #4f46e5;
+}
+
+.copyable:hover .copyable-icon {
+  color: #4f46e5;
+}
+
+.copyable--emphasis {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.copyable--copied,
+.copyable--copied:hover {
+  background: #d1fae5;
+  border-color: #6ee7b7;
+  color: #065f46;
+}
+
+.copyable-icon {
+  color: #9b96a8;
+  flex-shrink: 0;
+  transition: color 0.1s;
+}
+
 /* ── Spinner ──────────────────────────────────────────────────────────────── */
 
 @keyframes spin {

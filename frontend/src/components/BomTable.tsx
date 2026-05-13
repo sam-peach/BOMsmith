@@ -12,8 +12,9 @@ interface Props {
 
 // A cross-reference cell is Suggested when it has a value the system filled
 // in (LLM extraction or catalog match) that the operator has not confirmed.
+// Defensive against legacy rows where confirmedFields may be null/undefined.
 function isSuggested(row: BOMRow, field: ConfirmableField): boolean {
-  return row[field] !== '' && !row.confirmedFields.includes(field)
+  return row[field] !== '' && !(row.confirmedFields ?? []).includes(field)
 }
 
 function countSuggestedCells(rows: BOMRow[]): number {
@@ -24,15 +25,16 @@ function countSuggestedCells(rows: BOMRow[]): number {
 }
 
 function confirmField(row: BOMRow, field: ConfirmableField): BOMRow {
-  if (row.confirmedFields.includes(field)) return row
-  return { ...row, confirmedFields: [...row.confirmedFields, field] }
+  const current = row.confirmedFields ?? []
+  if (current.includes(field)) return row
+  return { ...row, confirmedFields: [...current, field] }
 }
 
 function confirmAllSuggestions(rows: BOMRow[]): BOMRow[] {
   return rows.map(r => {
     const toAdd = CONFIRMABLE_FIELDS.filter(f => isSuggested(r, f))
     if (toAdd.length === 0) return r
-    return { ...r, confirmedFields: [...r.confirmedFields, ...toAdd] }
+    return { ...r, confirmedFields: [...(r.confirmedFields ?? []), ...toAdd] }
   })
 }
 
@@ -63,12 +65,11 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
       // it back out of the confirmed set so it returns to the Empty state.
       if (CONFIRMABLE_FIELDS.includes(field as ConfirmableField)) {
         const f = field as ConfirmableField
+        const current = updated.confirmedFields ?? []
         const cleared = value === ''
         const next = cleared
-          ? updated.confirmedFields.filter(x => x !== f)
-          : updated.confirmedFields.includes(f)
-            ? updated.confirmedFields
-            : [...updated.confirmedFields, f]
+          ? current.filter(x => x !== f)
+          : current.includes(f) ? current : [...current, f]
         updated.confirmedFields = next
       }
       return updated
@@ -90,7 +91,7 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
       if (i !== index) return r
       const toAdd = CONFIRMABLE_FIELDS.filter(f => isSuggested(r, f))
       if (toAdd.length === 0) return r
-      return { ...r, confirmedFields: [...r.confirmedFields, ...toAdd] }
+      return { ...r, confirmedFields: [...(r.confirmedFields ?? []), ...toAdd] }
     }))
   }
 
