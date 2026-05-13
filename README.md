@@ -46,8 +46,14 @@ go run .
 | `AUTH_USERNAME` | Login username |
 | `AUTH_PASSWORD` | Login password |
 | `ANTHROPIC_API_KEY` | Anthropic API key — omit to use mock data |
+| `PRICING_PROVIDER` | `nexar` / `mock` / `csv-only`. Defaults to `nexar` if `NEXAR_CLIENT_ID` and `NEXAR_CLIENT_SECRET` are both set, else `mock`. |
+| `NEXAR_CLIENT_ID` | Nexar OAuth client id — required when `PRICING_PROVIDER=nexar` |
+| `NEXAR_CLIENT_SECRET` | Nexar OAuth client secret |
+| `NEXAR_TOKEN_URL` | Override the OAuth token endpoint (testing only) |
+| `NEXAR_GRAPHQL_URL` | Override the GraphQL endpoint (testing only) |
+| `PRICING_CACHE_TTL_HOURS` | `part_prices` freshness window (default `24`) |
 
-When `ANTHROPIC_API_KEY` is not set the server falls back to `mockAnalysis()`, which returns a realistic cable assembly BOM and exercises all flag types without making any API calls.
+When `ANTHROPIC_API_KEY` is not set the server falls back to `mockAnalysis()`, which returns a realistic cable assembly BOM and exercises all flag types without making any API calls. The same pattern applies to pricing: `PRICING_PROVIDER=mock` returns canned offers for `MOCK-MULTI` / `MOCK-SINGLE` MPNs so the full BOM-pricing UX works with no upstream credentials.
 
 ### 2. Frontend
 

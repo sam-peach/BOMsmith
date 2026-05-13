@@ -67,6 +67,11 @@ type Document struct {
 	// When set, mapping lookups prefer the client-scoped bucket and fall back
 	// to the generic bucket. Empty = untagged (legacy behaviour preserved).
 	ClientLabel string `json:"clientLabel"`
+	// LastPricingRun is decorated at read time from the pricing_runs table
+	// (most recent row for this document). Nil when the BOM has never been
+	// priced. Never persisted on the documents row — like BOMRow.Pricing,
+	// this is joined at fetch time.
+	LastPricingRun *PricingRun `json:"lastPricingRun,omitempty"`
 }
 
 // ScoreBreakdown holds per-signal contributions to the composite similarity score.
@@ -134,7 +139,72 @@ type BOMRow struct {
 	// Always serialised (even when empty) so the frontend can distinguish
 	// "system guessed" from "human said so" without a null check.
 	ConfirmedFields []string `json:"confirmedFields"`
+	// Pricing is decorated at read time from the part_prices cache. It is
+	// never persisted on the BOMRow JSON in the documents table — pricing
+	// drifts daily and the documents row should remain a pure record of
+	// operator-confirmed BOM content. Nil when the row has never been priced
+	// or the join produced no offers.
+	Pricing *RowPricing `json:"pricing,omitempty"`
 }
+
+// RowPricing is the per-BOM-row pricing payload joined onto a Document at
+// read time. The offers slice is one entry per (supplier, currency) and
+// carries the full price-break ladder; the derived fields (BestUnitPrice,
+// BestStockSupplier) are computed at decoration time from the ladder at
+// the row's confirmed quantity.
+type RowPricing struct {
+	Offers            []SupplierOffer `json:"offers"`
+	BestUnitPrice     *Money          `json:"bestUnitPrice,omitempty"`
+	BestStockSupplier string          `json:"bestStockSupplier,omitempty"`
+	FetchedAt         time.Time       `json:"fetchedAt"`
+}
+
+// SupplierOffer is one supplier's offer for one MPN in one currency.
+// PriceBreaks is sorted ascending by quantity; clients pick the largest
+// break ≤ desired qty when computing a unit price.
+type SupplierOffer struct {
+	Supplier     string       `json:"supplier"`
+	SKU          string       `json:"sku"`
+	PriceBreaks  []PriceBreak `json:"priceBreaks"`
+	Stock        *int         `json:"stock,omitempty"`
+	LeadTimeDays *int         `json:"leadTimeDays,omitempty"`
+	SupplierURL  string       `json:"supplierUrl"`
+	Source       string       `json:"source"` // "nexar" | "csv" | "manual"
+	Currency     string       `json:"currency"`
+	FetchedAt    time.Time    `json:"fetchedAt"`
+}
+
+type PriceBreak struct {
+	Quantity int     `json:"quantity"`
+	Price    float64 `json:"price"`
+}
+
+type Money struct {
+	Amount   float64 `json:"amount"`
+	Currency string  `json:"currency"`
+}
+
+// PricingRun records the outcome of one "Price BOM" click. Persisted in
+// the pricing_runs table; surfaced in the workflow footer.
+type PricingRun struct {
+	ID               string     `json:"id"`
+	DocumentID       string     `json:"documentId"`
+	OrganizationID   string     `json:"-"`
+	StartedAt        time.Time  `json:"startedAt"`
+	CompletedAt      *time.Time `json:"completedAt,omitempty"`
+	RowsTotal        int        `json:"rowsTotal"`
+	RowsPriced       int        `json:"rowsPriced"`
+	RowsUnavailable  int        `json:"rowsUnavailable"`
+	RowsSkipped      int        `json:"rowsSkipped"`
+	NexarCallsMade   int        `json:"nexarCallsMade"`
+	CacheHits        int        `json:"cacheHits"`
+	Currency         string     `json:"currency"`
+	ErrorMessage     string     `json:"errorMessage,omitempty"`
+}
+
+// FlagPricingUnavailable marks a row that was eligible for pricing
+// (non-empty MPN) but neither Nexar nor the CSV fallback had data for it.
+const FlagPricingUnavailable = "pricing_unavailable"
 
 type Organization struct {
 	ID        string    `json:"id"`

@@ -4,7 +4,7 @@ import type { BOMRow, Document, DocumentStatus, ExportConfig, Mapping } from './
 import { CONFIRMABLE_FIELDS } from './types/api'
 import {
   analyzeDocument, checkAuth, deleteDocument, exportCSVUrl, exportSAPUrl, exportTSVUrl,
-  getExportConfig, listDocuments, listMappingClients, login, logout, saveBOM, saveMapping,
+  getExportConfig, listDocuments, listMappingClients, login, logout, priceBOM, saveBOM, saveMapping,
   updateDocumentClient, uploadDocument, waitForAnalysis,
 } from './api/client'
 import type { ClientMappingSummary } from './types/api'
@@ -30,6 +30,8 @@ interface DocEntry {
   saved:              boolean
   error:              string | null
   analysisStartedAt:  number | null  // Date.now() when analysis began, null otherwise
+  pricing:            'idle' | 'loading' | 'error'
+  pricingError:       string | null
 }
 
 // ── Concurrency semaphore ────────────────────────────────────────────────────
@@ -111,6 +113,8 @@ export default function App() {
         saved:             true,
         error:             doc.status === 'error' ? (doc.errorMessage ?? 'Analysis failed') : null,
         analysisStartedAt: doc.status === 'analyzing' ? Date.now() : null,
+        pricing:           'idle',
+        pricingError:      null,
       })
     }
     setEntries(initial)
@@ -197,6 +201,8 @@ export default function App() {
         saved:              false,
         error:              null,
         analysisStartedAt:  null,
+        pricing:            'idle',
+        pricingError:       null,
       }
       return { tempId, file, placeholder }
     })
@@ -219,7 +225,7 @@ export default function App() {
         setEntries(prev => {
           const next = new Map(prev)
           next.delete(tempId)
-          next.set(doc.id, { doc, rows: [], uploading: false, saved: false, error: null, analysisStartedAt: null })
+          next.set(doc.id, { doc, rows: [], uploading: false, saved: false, error: null, analysisStartedAt: null, pricing: 'idle', pricingError: null })
           return next
         })
         // Keep the active selection pointing at the real doc.
@@ -283,6 +289,27 @@ export default function App() {
       patchEntry(id, { saved: true })
     } catch (e) {
       patchEntry(id, { error: (e as Error).message })
+    }
+  }
+
+  // Phase 1 of docs/pricing.md. Sends the BOM as-is to the server — pricing
+  // joins by MPN, not by what's on the page locally — and applies the
+  // returned per-row pricing + lastPricingRun to local state. Unsaved row
+  // edits are not blocked; the server prices the persisted BOM, and a
+  // subsequent Save will not clobber the pricing data (Pricing is
+  // decorated server-side, not persisted on the BOMRow).
+  async function handlePriceBOM(id: string) {
+    patchEntry(id, { pricing: 'loading', pricingError: null })
+    try {
+      const updated = await priceBOM(id)
+      patchEntry(id, {
+        doc: updated,
+        rows: updated.bomRows,
+        pricing: 'idle',
+        pricingError: null,
+      })
+    } catch (e) {
+      patchEntry(id, { pricing: 'error', pricingError: (e as Error).message })
     }
   }
 
@@ -545,6 +572,10 @@ export default function App() {
                         >
                           {activeEntry.saved ? 'Saved ✓' : 'Save Changes'}
                         </button>
+                        <PriceBOMButton
+                          entry={activeEntry}
+                          onClick={() => handlePriceBOM(activeEntry.doc.id)}
+                        />
                         <button style={copied ? savedBtn : secondaryBtn} onClick={() => handleCopyForSAP(activeEntry.rows)}>
                           {copied ? 'Copied ✓' : 'Copy for SAP'}
                         </button>
@@ -595,6 +626,50 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </div>
+  )
+}
+
+// ── PriceBOMButton ───────────────────────────────────────────────────────────
+
+// PriceBOMButton triggers POST /api/documents/{id}/price. The label flips
+// between "Price BOM" / "Re-price BOM" depending on whether a prior run
+// exists, and renders a compact pricing-run summary alongside on success
+// ("42/45 priced · 2 unavailable · 7s ago"). Disabled when no row carries a
+// non-empty MPN — there'd be nothing for the server to price.
+function PriceBOMButton({ entry, onClick }: { entry: DocEntry; onClick: () => void }) {
+  const lastRun = entry.doc.lastPricingRun
+  const hasPriceableRow = entry.rows.some(r => r.manufacturerPartNumber.trim() !== '')
+  const loading = entry.pricing === 'loading'
+  const errored = entry.pricing === 'error'
+  const label = loading ? 'Pricing…' : lastRun ? 'Re-price BOM' : 'Price BOM'
+
+  let summary: React.ReactNode = null
+  if (errored && entry.pricingError) {
+    summary = <span style={{ color: '#b91c1c', fontSize: 12 }}>{entry.pricingError}</span>
+  } else if (lastRun) {
+    const unavailable = lastRun.rowsUnavailable
+    summary = (
+      <span style={{ color: '#6b7280', fontSize: 12 }}>
+        {lastRun.rowsPriced}/{lastRun.rowsTotal} priced
+        {unavailable > 0 && (
+          <> · <span style={{ color: '#92400e' }}>{unavailable} unavailable</span></>
+        )}
+      </span>
+    )
+  }
+
+  return (
+    <>
+      <button
+        style={loading || !hasPriceableRow ? { ...secondaryBtn, opacity: 0.6, cursor: 'not-allowed' } : secondaryBtn}
+        onClick={onClick}
+        disabled={loading || !hasPriceableRow}
+        title={hasPriceableRow ? 'Look up supplier pricing for every row with an MPN' : 'No rows with an MPN yet — confirm an MPN on at least one row first'}
+      >
+        {label}
+      </button>
+      {summary}
+    </>
   )
 }
 

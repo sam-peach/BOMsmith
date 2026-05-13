@@ -69,6 +69,17 @@ func main() {
 	orgSettings   := &pgOrgSettingsRepository{db: db}
 	errorLog      := &pgErrorLogRepository{db: db}
 	sessions      := &pgSessionStore{db: db, ttl: 24 * time.Hour}
+	priceCache    := &pgPriceCacheRepository{db: db}
+	pricingRuns   := &pgPricingRunRepository{db: db}
+
+	priceProvider := buildPricingProvider()
+	pricingCacheTTL := defaultPricingCacheTTL
+	if v := os.Getenv("PRICING_CACHE_TTL_HOURS"); v != "" {
+		if h, err := strconv.Atoi(v); err == nil && h > 0 {
+			pricingCacheTTL = time.Duration(h) * time.Hour
+			log.Printf("pricing: cache TTL set to %s from PRICING_CACHE_TTL_HOURS", pricingCacheTTL)
+		}
+	}
 
 	srv := &server{
 		store:          store,
@@ -84,6 +95,11 @@ func main() {
 		orgSettings:   orgSettings,
 		errorLog:      errorLog,
 		adminUsername: os.Getenv("AUTH_USERNAME"),
+		priceCache:      priceCache,
+		priceProvider:   priceProvider,
+		pricingRuns:     pricingRuns,
+		pricingCacheTTL: pricingCacheTTL,
+		pricingCurrency: defaultPricingCurrency,
 	}
 
 	staticDir := os.Getenv("STATIC_DIR")
@@ -105,6 +121,7 @@ func main() {
 	mux.HandleFunc("GET /api/documents", srv.requireAuth(srv.listDocuments))
 	mux.HandleFunc("POST /api/documents/upload", srv.requireAuth(srv.upload))
 	mux.HandleFunc("POST /api/documents/{id}/analyze", srv.requireAuth(srv.analyze))
+	mux.HandleFunc("POST /api/documents/{id}/price", srv.requireAuth(srv.priceBOM))
 	mux.HandleFunc("GET /api/documents/{id}", srv.requireAuth(srv.get))
 	mux.HandleFunc("DELETE /api/documents/{id}", srv.requireAuth(srv.deleteDocument))
 	mux.HandleFunc("GET /api/documents/{id}/bom.csv", srv.requireAuth(srv.exportCSV))
@@ -171,6 +188,53 @@ func loadDotEnv(path string) {
 		if key != "" && os.Getenv(key) == "" {
 			os.Setenv(key, val)
 		}
+	}
+}
+
+// buildPricingProvider selects the pricing source from PRICING_PROVIDER.
+//
+//   - "nexar"     → Nexar/Octopart; requires NEXAR_CLIENT_ID + NEXAR_CLIENT_SECRET.
+//   - "mock"      → canned in-memory fixtures (local dev, no credentials).
+//   - "csv-only"  → no upstream provider; relies entirely on the future CSV
+//                   fallback path. Returns nil so /price 503s for now.
+//
+// Default is "nexar" when both credentials are present, else "mock". This
+// keeps `docker-compose up` working for a developer with no API keys.
+func buildPricingProvider() pricingProvider {
+	mode := strings.ToLower(strings.TrimSpace(os.Getenv("PRICING_PROVIDER")))
+	clientID := os.Getenv("NEXAR_CLIENT_ID")
+	clientSecret := os.Getenv("NEXAR_CLIENT_SECRET")
+	if mode == "" {
+		if clientID != "" && clientSecret != "" {
+			mode = "nexar"
+		} else {
+			mode = "mock"
+		}
+	}
+	switch mode {
+	case "mock":
+		log.Println("pricing: provider=mock (canned fixtures; no upstream calls)")
+		return newMockPricingProvider()
+	case "csv-only":
+		log.Println("pricing: provider=csv-only (no upstream; future CSV fallback only)")
+		return nil
+	case "nexar":
+		if clientID == "" || clientSecret == "" {
+			log.Println("pricing: PRICING_PROVIDER=nexar but NEXAR_CLIENT_ID/SECRET missing — falling back to mock")
+			return newMockPricingProvider()
+		}
+		p := newNexarProvider(clientID, clientSecret)
+		if v := os.Getenv("NEXAR_TOKEN_URL"); v != "" {
+			p.tokenURL = v
+		}
+		if v := os.Getenv("NEXAR_GRAPHQL_URL"); v != "" {
+			p.graphqlURL = v
+		}
+		log.Println("pricing: provider=nexar")
+		return p
+	default:
+		log.Printf("pricing: unknown PRICING_PROVIDER=%q — falling back to mock", mode)
+		return newMockPricingProvider()
 	}
 }
 

@@ -392,6 +392,48 @@ every drawing.
 
 Canonical part entry used by the fingerprint-based suggestion engine. Distinct from `Mapping`: mappings are keyed by customer part number; catalog parts are matched by structured attributes derived from the description.
 
+### Pricing (types.go, pricing.go)
+
+```
+RowPricing
+  Offers             []SupplierOffer
+  BestUnitPrice      *Money          — picked from the cheapest break ≤ row qty
+  BestStockSupplier  string          — supplier with the highest in-stock count
+  FetchedAt          time.Time       — newest FetchedAt across the offer set
+
+SupplierOffer
+  Supplier      string       — "DigiKey" | "Mouser" | "Farnell" | "RS" | …
+  SKU           string       — supplier order code
+  PriceBreaks   []PriceBreak — ascending by quantity
+  Stock         *int
+  LeadTimeDays  *int
+  SupplierURL   string       — click-through to product page
+  Source        string       — "nexar" | "csv" | "manual" | "mock"
+  Currency      string       — ISO 4217 (always equals the run's currency)
+  FetchedAt     time.Time
+
+PricingRun
+  ID                string
+  DocumentID        string
+  StartedAt         time.Time
+  CompletedAt       *time.Time
+  RowsTotal         int    — total rows on the BOM at run time
+  RowsPriced        int    — rows that got at least one offer
+  RowsUnavailable   int    — rows with an MPN but no offers anywhere
+  RowsSkipped       int    — rows with no MPN
+  NexarCallsMade    int    — cache misses that hit the provider
+  CacheHits         int    — RowsPriced - NexarCallsMade
+  Currency          string
+  ErrorMessage      string — populated on 502/transport failure
+```
+
+**Key invariants:**
+
+- `Pricing` is never persisted on a `BOMRow` — `documents.bom_rows` JSON stays pure operator-confirmed content. It is joined at read time from `part_prices` keyed on `(mpn, currency)`.
+- `part_prices` is **not** org-scoped. Two orgs querying the same MPN share the cache; pricing is commodity data, mapping is the org-scoped layer.
+- Cache TTL is 24h by default (`PRICING_CACHE_TTL_HOURS`). Stale rows are treated as misses, not silently returned.
+- `pricing_unavailable` is set on a row only after a run finds no offers from any source — never on rows skipped for missing MPN.
+
 ```
 CatalogPart
   ID                      string
@@ -517,7 +559,8 @@ All routes except `/healthz` and `/api/auth/login` require a valid `sme_session`
 | `GET` | `/api/documents/healthz` | Health check (public). Returns 200. |
 | `POST` | `/api/documents/upload` | Upload a PDF. Multipart `file` field, optional `clientLabel` field. Returns `Document`. |
 | `POST` | `/api/documents/{id}/analyze` | Trigger analysis. Returns updated `Document`. |
-| `GET` | `/api/documents/{id}` | Fetch document by ID. |
+| `GET` | `/api/documents/{id}` | Fetch document by ID. Decorates each row with cached pricing (when present) and `lastPricingRun` from `pricing_runs`. |
+| `POST` | `/api/documents/{id}/price` | Run pricing for every BOM row with a non-empty MPN. Cache-first, falls through to the configured `pricingProvider`. Returns the decorated `Document` plus `lastPricingRun`. 503 when no provider is configured, 502 on upstream transport failure. |
 | `PATCH` | `/api/documents/{id}` | Update mutable fields. Body: `{"clientLabel":"..."}` to retag a drawing. |
 | `PUT` | `/api/documents/{id}/bom` | Save edited BOM rows. Body: `[]BOMRow`. |
 | `GET` | `/api/documents/{id}/bom.csv` | Download BOM as SAP-compatible CSV. |
@@ -579,7 +622,8 @@ App.tsx state
 |-----------|---------------|
 | `LoginPage` | Sign-in form; calls `onLogin(username, password)` prop |
 | `UploadArea` | Drag-and-drop or click-to-select PDF; validates `.pdf` extension client-side |
-| `BomTable` | Editable table; each cell is an `<input>`; cell-level visual state for confirmed vs system-suggested cross-reference fields |
+| `BomTable` | Editable table; each cell is an `<input>`; cell-level visual state for confirmed vs system-suggested cross-reference fields. The "Best Price" column renders `PricingCell` — click-through to the best-stock supplier's URL. |
+| `PriceBOMButton` (inline in `App.tsx`) | Workflow-page toolbar button that POSTs to `/api/documents/{id}/price`. Disabled when no row carries a non-empty MPN; flips label to "Re-price BOM" once a `lastPricingRun` exists; shows a compact `N/M priced · K unavailable` summary inline. |
 | `MappingSearch` | Top-nav search bar; debounced on-demand mapping lookup with click-to-copy per P/N field |
 | `MappingsPage` | Full mappings management page at `/mappings`; browse / filter / inline-edit / delete |
 | `WarningsPanel` | Dismissible warning banners surfaced from `doc.warnings` |

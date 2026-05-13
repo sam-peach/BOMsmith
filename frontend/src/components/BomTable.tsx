@@ -1,6 +1,6 @@
 import { type CSSProperties, useEffect, useRef, useState } from 'react'
-import type { BOMRow, ConfirmableField, Mapping, Quantity } from '../types/api'
-import { CONFIRMABLE_FIELDS } from '../types/api'
+import type { BOMRow, ConfirmableField, Mapping, Quantity, RowPricing } from '../types/api'
+import { CONFIRMABLE_FIELDS, FLAG_PRICING_UNAVAILABLE } from '../types/api'
 import { suggestMappings } from '../api/client'
 import { colors, radius } from '../theme'
 
@@ -51,11 +51,38 @@ const COLUMNS = [
   { key: 'supplierReference',      label: 'Supplier Ref', width: 110 },
   { key: 'notes',                  label: 'Notes',        width: 180 },
   { key: 'confidence',             label: 'Conf.',        width: 56  },
+  { key: 'pricing',                label: 'Best Price',   width: 110 },
   { key: 'flags',                  label: 'Flags',        width: 160 },
   { key: '_actions',               label: '',             width: 60  },
 ]
 
+// Standard quantity ladder for the details panel. We expose the four most
+// useful breakpoints (1 / 10 / 100 / 1000) and walk each offer's actual
+// ladder up to find the matching unit price; suppliers with sparse ladders
+// (e.g. only qty=1 and qty=100) show the qty=1 price for "qty 10" because
+// that's the price they'd actually charge at order time. Mirrors the
+// pickBestUnitPrice logic in the Go backend.
+const PRICING_PANEL_QTYS = [1, 10, 100, 1000]
+
+function priceAtQty(breaks: { quantity: number; price: number }[], qty: number): number | null {
+  if (breaks.length === 0) return null
+  let best: { quantity: number; price: number } | null = null
+  for (const b of breaks) {
+    if (b.quantity > qty) continue
+    if (best === null || b.quantity > best.quantity) best = b
+  }
+  if (best === null) {
+    // No break at or below qty — fall back to the cheapest higher break.
+    best = breaks.reduce((m, b) => (b.quantity < m.quantity ? b : m), breaks[0])
+  }
+  return best.price
+}
+
 export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
+  // Only one row's pricing panel is open at a time — opening another
+  // collapses the previous. Keeps the table compact on dense BOMs.
+  const [expandedRowId, setExpandedRowId] = useState<string | null>(null)
+
   function update(index: number, field: keyof BOMRow, value: BOMRow[keyof BOMRow]) {
     onChange(rows.map((r, i) => {
       if (i !== index) return r
@@ -172,6 +199,8 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
                 key={row.id}
                 row={row}
                 index={i}
+                expanded={expandedRowId === row.id}
+                onToggleExpand={() => setExpandedRowId(prev => prev === row.id ? null : row.id)}
                 onUpdate={update}
                 onUpdateQty={updateQty}
                 onConfirmCell={confirmCell}
@@ -188,10 +217,12 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
 }
 
 function BomRow({
-  row, index, onUpdate, onUpdateQty, onConfirmCell, onConfirmRow, onDelete, onSaveMapping,
+  row, index, expanded, onToggleExpand, onUpdate, onUpdateQty, onConfirmCell, onConfirmRow, onDelete, onSaveMapping,
 }: {
   row: BOMRow
   index: number
+  expanded: boolean
+  onToggleExpand: () => void
   onUpdate: (i: number, field: keyof BOMRow, value: BOMRow[keyof BOMRow]) => void
   onUpdateQty: (i: number, field: keyof Quantity, value: Quantity[keyof Quantity]) => void
   onConfirmCell: (i: number, field: ConfirmableField) => void
@@ -253,7 +284,8 @@ function BomRow({
   const rowHasSuggestions = CONFIRMABLE_FIELDS.some(f => isSuggested(row, f))
 
   return (
-    <tr style={rowTint(row)}>
+    <>
+    <tr style={expanded ? { ...rowTint(row), background: '#f8f7ff' } : rowTint(row)}>
       <td style={{ ...td, color: '#9ca3af', textAlign: 'center', fontSize: 12 }}>
         {row.lineNumber}
       </td>
@@ -383,6 +415,15 @@ function BomRow({
         <ConfidenceBadge value={row.confidence} />
       </td>
       <td style={td}>
+        <PricingCell
+          pricing={row.pricing}
+          mpn={row.manufacturerPartNumber}
+          flags={row.flags}
+          expanded={expanded}
+          onToggleExpand={onToggleExpand}
+        />
+      </td>
+      <td style={td}>
         <FlagList flags={row.flags} />
       </td>
       <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
@@ -409,6 +450,14 @@ function BomRow({
         </button>
       </td>
     </tr>
+    {expanded && row.pricing && (
+      <tr>
+        <td colSpan={COLUMNS.length} style={pricingPanelCell}>
+          <PricingDetailsPanel pricing={row.pricing} mpn={row.manufacturerPartNumber} rowQty={row.quantity.value ?? 1} />
+        </td>
+      </tr>
+    )}
+    </>
   )
 }
 
@@ -515,6 +564,211 @@ const FLAG_CONFIG: Record<string, { label: string; bg: string; color: string }> 
   'dimension-estimated':         { label: 'estimated',  bg: '#ede9fe', color: '#5b21b6' },
   'missing-manufacturer-pn':     { label: 'no MPN',     bg: '#fee2e2', color: '#991b1b' },
   'ambiguous-spec':              { label: 'ambiguous',  bg: '#fef3c7', color: '#92400e' },
+  'pricing_unavailable':         { label: 'no price',   bg: '#fee2e2', color: '#991b1b' },
+}
+
+// HIGH_PRICE_WARN_THRESHOLD trips an amber visual + tooltip on the compact
+// pricing cell. Picked at £1000 because most parts on these BOMs are well
+// under that — anything past it is either a high-value assembly (rare) or a
+// data quirk (full-reel price reported at qty 1, wrong-currency conversion).
+// Crossing it doesn't suppress the value; it just nudges the operator to
+// double-check before pasting into SAP.
+const HIGH_PRICE_WARN_THRESHOLD = 1000
+
+// PricingCell: two-line compact rendering (price on top, supplier on the
+// next line) plus an expand chevron. Click the chevron OR the cell body to
+// toggle the row's pricing-details panel. The supplier URL moves into the
+// details panel — keeping the compact cell click-target for expansion.
+function PricingCell({
+  pricing, mpn, flags, expanded, onToggleExpand,
+}: {
+  pricing?: RowPricing
+  mpn: string
+  flags: string[]
+  expanded: boolean
+  onToggleExpand: () => void
+}) {
+  if (pricing && pricing.bestUnitPrice) {
+    const sup = pricing.bestStockSupplier || pricing.offers[0]?.supplier
+    const price = pricing.bestUnitPrice
+    const high = price.amount > HIGH_PRICE_WARN_THRESHOLD
+    return (
+      <button
+        type="button"
+        onClick={onToggleExpand}
+        style={pricingCellButton}
+        title={
+          high
+            ? `Price is unusually high (>${HIGH_PRICE_WARN_THRESHOLD}) — verify before pasting into SAP. Click to see all ${pricing.offers.length} offer(s).`
+            : `${pricing.offers.length} offer${pricing.offers.length === 1 ? '' : 's'} — click to ${expanded ? 'collapse' : 'expand'}`
+        }
+      >
+        <span style={{ display: 'flex', alignItems: 'baseline', gap: 4 }}>
+          <span style={{
+            fontFamily: 'monospace', fontWeight: 600,
+            color: high ? '#92400e' : colors.text,
+          }}>
+            {formatMoney(price.amount, price.currency)}
+          </span>
+          {high && <span style={{ color: '#b45309', fontSize: 11 }}>⚠</span>}
+          <ExpandCaret expanded={expanded} />
+        </span>
+        {sup && (
+          <span style={{ color: colors.textMuted, fontSize: 11, lineHeight: 1.1 }}>{sup}</span>
+        )}
+      </button>
+    )
+  }
+  if (flags.includes(FLAG_PRICING_UNAVAILABLE)) {
+    return <span style={{ color: '#991b1b', fontSize: 12 }} title="Pricing run found no offers for this MPN">No price</span>
+  }
+  return (
+    <span style={{ color: '#d1d5db', fontSize: 12 }}
+      title={mpn.trim() === '' ? 'No MPN to price' : 'Not yet priced — click "Price BOM" in the toolbar'}>
+      —
+    </span>
+  )
+}
+
+function ExpandCaret({ expanded }: { expanded: boolean }) {
+  return (
+    <svg width="9" height="9" viewBox="0 0 12 12" aria-hidden="true"
+      style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.12s', color: '#9ca3af' }}>
+      <path d="M4 2 L8 6 L4 10" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+// PricingDetailsPanel is the inline expansion that opens under a BOM row.
+// Renders one row per offer (so two offers from the same supplier appear
+// as two rows), four fixed qty columns walked up each offer's break ladder,
+// stock + lead time on the left, click-through link on the right. Cheapest
+// price in each qty column is highlighted; the offer whose qty=1 price is
+// cheapest is sorted first.
+function PricingDetailsPanel({ pricing, mpn, rowQty }: { pricing: RowPricing; mpn: string; rowQty: number }) {
+  // Sort offers by ascending qty=1 price so the operator's eye lands on the
+  // cheapest entry first. Out-of-stock offers (Stock === 0) sink to the
+  // bottom regardless of price — Andrew can't order what nobody has.
+  const offers = [...pricing.offers].sort((a, b) => {
+    const aOut = a.stock === 0
+    const bOut = b.stock === 0
+    if (aOut !== bOut) return aOut ? 1 : -1
+    const pa = priceAtQty(a.priceBreaks, 1) ?? Number.POSITIVE_INFINITY
+    const pb = priceAtQty(b.priceBreaks, 1) ?? Number.POSITIVE_INFINITY
+    return pa - pb
+  })
+
+  // Compute the cheapest offer per qty column so we can highlight it.
+  const cheapestByQty: Record<number, number | null> = {}
+  for (const q of PRICING_PANEL_QTYS) {
+    let min: number | null = null
+    for (const o of offers) {
+      const p = priceAtQty(o.priceBreaks, q)
+      if (p !== null && (min === null || p < min)) min = p
+    }
+    cheapestByQty[q] = min
+  }
+
+  const fetched = formatRelativeTime(pricing.fetchedAt)
+  const bestPriceLabel = pricing.bestUnitPrice
+    ? `${formatMoney(pricing.bestUnitPrice.amount, pricing.bestUnitPrice.currency)} @ qty ${rowQty}`
+    : '—'
+
+  return (
+    <div style={panelWrap}>
+      <div style={panelHeader}>
+        <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpn || 'unknown MPN'}</span>
+        <span style={{ color: colors.textMuted }}>· {offers.length} offer{offers.length === 1 ? '' : 's'}</span>
+        <span style={{ color: colors.textMuted }}>· best {bestPriceLabel}</span>
+        <span style={{ color: colors.textSubtle, marginLeft: 'auto' }}>fetched {fetched}</span>
+      </div>
+      <table style={panelTable}>
+        <thead>
+          <tr>
+            <th style={panelTh}>Supplier</th>
+            <th style={{ ...panelTh, textAlign: 'right' }}>Stock</th>
+            <th style={{ ...panelTh, textAlign: 'right' }}>Lead</th>
+            {PRICING_PANEL_QTYS.map(q => (
+              <th key={q} style={{ ...panelTh, textAlign: 'right' }}>qty {q}</th>
+            ))}
+            <th style={panelTh}></th>
+          </tr>
+        </thead>
+        <tbody>
+          {offers.map((o, i) => {
+            const outOfStock = o.stock === 0
+            return (
+              <tr key={`${o.supplier}-${o.sku}-${i}`} style={outOfStock ? { opacity: 0.55 } : undefined}>
+                <td style={panelTd}>
+                  <span style={{ fontWeight: 600 }}>{o.supplier}</span>
+                  <span style={{ color: colors.textSubtle, fontSize: 11, marginLeft: 6, fontFamily: 'monospace' }}>
+                    {o.sku}
+                  </span>
+                </td>
+                <td style={{ ...panelTd, textAlign: 'right', fontFamily: 'monospace' }}>
+                  {o.stock != null ? o.stock.toLocaleString() : <span style={{ color: colors.textSubtle }}>—</span>}
+                </td>
+                <td style={{ ...panelTd, textAlign: 'right', fontFamily: 'monospace' }}>
+                  {o.leadTimeDays != null ? `${o.leadTimeDays}d` : <span style={{ color: colors.textSubtle }}>—</span>}
+                </td>
+                {PRICING_PANEL_QTYS.map(q => {
+                  const p = priceAtQty(o.priceBreaks, q)
+                  const isCheapest = p !== null && cheapestByQty[q] !== null && Math.abs(p - cheapestByQty[q]!) < 1e-9
+                  return (
+                    <td key={q} style={{
+                      ...panelTd, textAlign: 'right', fontFamily: 'monospace',
+                      ...(isCheapest ? { background: '#ecfdf5', color: '#065f46', fontWeight: 600 } : {}),
+                    }}>
+                      {p !== null ? formatMoney(p, o.currency) : <span style={{ color: colors.textSubtle }}>—</span>}
+                    </td>
+                  )
+                })}
+                <td style={{ ...panelTd, textAlign: 'right' }}>
+                  {o.supplierUrl ? (
+                    <a href={o.supplierUrl} target="_blank" rel="noreferrer noopener"
+                      style={{ fontSize: 11, color: colors.brand, textDecoration: 'none' }}
+                      title={`Open ${o.supplier} listing`}>
+                      view ↗
+                    </a>
+                  ) : null}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// formatRelativeTime — duplicated from MappingSearch for now; pulling into a
+// shared module would mean a new file, and this isn't a behavioural concern.
+function formatRelativeTime(iso: string): string {
+  const t = new Date(iso).getTime()
+  if (Number.isNaN(t)) return '—'
+  const diff = Date.now() - t
+  const s = Math.floor(diff / 1000)
+  if (s < 60) return 'just now'
+  const m = Math.floor(s / 60); if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60); if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24); if (d < 30) return `${d}d ago`
+  return `${Math.floor(d / 30)}mo ago`
+}
+
+// formatMoney renders an amount with a decimal count tuned to the magnitude:
+// ≥ £1 → 2 places (£7,963.12, not £7,963.1172); < £1 → 4 places at most so a
+// 2.6p resistor reads as £0.026, not £0.03. Trailing zeros in the sub-unit
+// case are trimmed so a £0.30 doesn't render as £0.3000.
+function formatMoney(amount: number, currency: string): string {
+  const subUnit = Math.abs(amount) < 1 && amount !== 0
+  const opts = subUnit
+    ? { minimumFractionDigits: 2, maximumFractionDigits: 4 }
+    : { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+  try {
+    return new Intl.NumberFormat(undefined, { style: 'currency', currency, ...opts }).format(amount)
+  } catch {
+    return `${amount.toFixed(subUnit ? 4 : 2)} ${currency}`
+  }
 }
 
 function FlagList({ flags }: { flags: string[] }) {
@@ -561,6 +815,60 @@ const td: CSSProperties = {
   padding:       '5px 8px',
   borderBottom:  `1px solid ${colors.borderLight}`,
   verticalAlign: 'middle',
+}
+
+// ── PricingCell + PricingDetailsPanel styles ────────────────────────────────
+
+const pricingCellButton: CSSProperties = {
+  display:       'flex',
+  flexDirection: 'column',
+  alignItems:    'flex-start',
+  gap:           1,
+  width:         '100%',
+  padding:       '2px 4px',
+  background:    'transparent',
+  border:        '1px solid transparent',
+  borderRadius:  radius.sm,
+  cursor:        'pointer',
+  textAlign:     'left',
+  fontFamily:    'inherit',
+  fontSize:      12,
+  color:         'inherit',
+}
+
+const pricingPanelCell: CSSProperties = {
+  background:   '#fafaff',
+  borderTop:    `1px solid ${colors.border}`,
+  borderBottom: `1px solid ${colors.borderLight}`,
+  padding:      '8px 16px 12px',
+}
+
+const panelWrap: CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 6,
+}
+
+const panelHeader: CSSProperties = {
+  display: 'flex', alignItems: 'baseline', gap: 6,
+  fontSize: 12, color: colors.text,
+}
+
+const panelTable: CSSProperties = {
+  width: '100%', borderCollapse: 'collapse', fontSize: 12,
+  background: colors.surface, border: `1px solid ${colors.borderLight}`, borderRadius: radius.sm,
+}
+
+const panelTh: CSSProperties = {
+  textAlign: 'left',
+  padding: '5px 8px',
+  borderBottom: `1px solid ${colors.borderLight}`,
+  fontSize: 11, fontWeight: 600, color: colors.textMuted,
+  textTransform: 'uppercase', letterSpacing: '0.04em',
+  background: colors.bg,
+}
+
+const panelTd: CSSProperties = {
+  padding: '5px 8px',
+  borderBottom: `1px solid ${colors.borderLight}`,
 }
 
 const toolbar: CSSProperties = {

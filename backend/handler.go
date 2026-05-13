@@ -32,6 +32,14 @@ type server struct {
 	matchFeedback  matchFeedbackRepository
 	matchThreshold float64
 	adminUsername  string
+
+	// Pricing — Phase 1 (docs/pricing.md). When priceProvider is nil,
+	// /api/documents/{id}/price returns 503 and no pricing UI surfaces.
+	priceCache       priceCacheRepository
+	priceProvider    pricingProvider
+	pricingRuns      pricingRunRepository
+	pricingCacheTTL  time.Duration
+	pricingCurrency  string
 }
 
 // POST /api/documents/upload
@@ -217,6 +225,25 @@ func (s *server) get(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusNotFound, "document not found")
 		return
+	}
+	// Pricing is decorated at read time from the cache + pricing_runs.
+	// Skipped when no priceCache is wired (legacy/test fixtures) so the
+	// rest of the handler keeps working without the pricing stack.
+	if s.priceCache != nil {
+		currency := s.pricingCurrency
+		if currency == "" {
+			currency = defaultPricingCurrency
+		}
+		ttl := s.pricingCacheTTL
+		if ttl <= 0 {
+			ttl = defaultPricingCacheTTL
+		}
+		decoratePricing(doc, s.priceCache, currency, ttl)
+	}
+	if s.pricingRuns != nil {
+		if run, err := s.pricingRuns.latest(doc.ID); err == nil && run != nil {
+			doc.LastPricingRun = run
+		}
 	}
 	writeJSON(w, http.StatusOK, doc)
 }

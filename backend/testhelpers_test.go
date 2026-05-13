@@ -5,6 +5,7 @@ package main
 // when the app moved to requiring Postgres for all deployments.
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -309,4 +310,145 @@ func (r *fakeMatchFeedbackRepository) all(orgID string) []*MatchFeedback {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.entries[orgID]
+}
+
+// ── memPriceCache ─────────────────────────────────────────────────────────────
+
+// memPriceCache is the in-memory test double for the part_prices table.
+// Keyed by (mpn, supplier, currency) to mirror the pg unique constraint.
+type memPriceCache struct {
+	mu   sync.Mutex
+	data map[string]SupplierOffer
+	now  func() time.Time
+}
+
+func newMemPriceCache() *memPriceCache {
+	return &memPriceCache{data: map[string]SupplierOffer{}, now: func() time.Time { return time.Now().UTC() }}
+}
+
+func memPriceCacheKey(mpn, supplier, sku, currency string) string {
+	return normMPN(mpn) + "|" + supplier + "|" + sku + "|" + currency
+}
+
+func (c *memPriceCache) get(mpn, currency string, ttl time.Duration) ([]SupplierOffer, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	prefix := normMPN(mpn) + "|"
+	cutoff := c.now().Add(-ttl)
+	var out []SupplierOffer
+	for k, o := range c.data {
+		if !strings.HasPrefix(k, prefix) {
+			continue
+		}
+		if o.Currency != currency {
+			continue
+		}
+		if !o.FetchedAt.After(cutoff) {
+			continue
+		}
+		out = append(out, o)
+	}
+	if len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
+func (c *memPriceCache) put(mpn string, offers []SupplierOffer) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, o := range offers {
+		if o.FetchedAt.IsZero() {
+			o.FetchedAt = c.now()
+		}
+		c.data[memPriceCacheKey(mpn, o.Supplier, o.SKU, o.Currency)] = o
+	}
+	return nil
+}
+
+// ── memPricingRuns ────────────────────────────────────────────────────────────
+
+type memPricingRuns struct {
+	mu   sync.Mutex
+	runs map[string]*PricingRun
+}
+
+func newMemPricingRuns() *memPricingRuns {
+	return &memPricingRuns{runs: map[string]*PricingRun{}}
+}
+
+func (r *memPricingRuns) create(run *PricingRun) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if run.ID == "" {
+		run.ID = newID()
+	}
+	stored := *run
+	r.runs[run.ID] = &stored
+	return nil
+}
+
+func (r *memPricingRuns) complete(run *PricingRun) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	stored, ok := r.runs[run.ID]
+	if !ok {
+		return fmt.Errorf("run %q not found", run.ID)
+	}
+	*stored = *run
+	return nil
+}
+
+func (r *memPricingRuns) latest(documentID string) (*PricingRun, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var latest *PricingRun
+	for _, run := range r.runs {
+		if run.DocumentID != documentID {
+			continue
+		}
+		if latest == nil || run.StartedAt.After(latest.StartedAt) {
+			latest = run
+		}
+	}
+	return latest, nil
+}
+
+// ── stubPricingProvider ───────────────────────────────────────────────────────
+
+// stubPricingProvider lets tests assert what was called and return canned
+// per-MPN responses. It defaults to "unknown MPN → empty offers".
+type stubPricingProvider struct {
+	mu      sync.Mutex
+	answers map[string][]SupplierOffer
+	calls   []string
+	err     error
+}
+
+func newStubPricingProvider() *stubPricingProvider {
+	return &stubPricingProvider{answers: map[string][]SupplierOffer{}}
+}
+
+func (s *stubPricingProvider) name() string { return "stub" }
+
+func (s *stubPricingProvider) priceByMPN(_ context.Context, mpn, _ string) ([]SupplierOffer, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, normMPN(mpn))
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.answers[normMPN(mpn)], nil
+}
+
+func (s *stubPricingProvider) set(mpn string, offers []SupplierOffer) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.answers[normMPN(mpn)] = offers
+}
+
+func (s *stubPricingProvider) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.calls)
 }
