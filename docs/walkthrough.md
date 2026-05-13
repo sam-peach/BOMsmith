@@ -476,11 +476,13 @@ CPN lookup is case-insensitive (`normKey` uppercases the input); client-label ma
 
 ### On-demand mapping search
 
-Operators can interrogate the mapping store directly via the search bar in the top nav (component: `MappingSearch.tsx`). The frontend calls `GET /api/mappings/search?q=...` which substring-matches across `customer_part_number`, `internal_part_number`, `manufacturer_part_number`, and `description` and returns up to 20 mappings ordered by `last_used_at DESC`. The same MPN under multiple client buckets returns as multiple rows so the operator sees each client's distinct interpretation.
+Operators can interrogate the mapping store directly via the search bar in the top nav (component: `MappingSearch.tsx`). The frontend calls `GET /api/mappings/search?q=...&limit=50` which substring-matches across `customer_part_number`, `internal_part_number`, `manufacturer_part_number`, and `description` and returns up to 50 mappings ordered by `last_used_at DESC`. The same MPN under multiple client buckets returns as multiple rows so the operator sees each client's distinct interpretation.
+
+Results are grouped client-side by `(clientLabel, internalPartNumber)`: when many customer P/Ns share an IPN (color variants of a generic wire, say), they collapse into a single result row with the shared IPN as the headline and the differentiating CPN/MPN values listed as nested variants under a left rail. Single-variant groups render flat (no nesting). IPN-less mappings each form their own singleton group — pooling them by empty key would mash unrelated parts together. The header tally shows `N mappings across M internal P/Ns` when grouping collapses the count.
 
 Result rows lead with the **internal P/N** as the headline answer — that's what Andrew uses next (paste into SAP). Customer P/N and Mfr P/N are demoted to the footer. Each P/N value is independently click-to-copy.
 
-Keyboard navigation: ↑/↓ moves the highlight; Enter copies the highlighted row's internal P/N; Esc closes the dropdown. The debounce + a ref-counter guard prevent stale responses from clobbering newer queries.
+Keyboard navigation: ↑/↓ moves the highlight between groups; Enter copies the highlighted group's internal P/N; Esc closes the dropdown. The debounce + a ref-counter guard prevent stale responses from clobbering newer queries.
 
 ### Mappings management page
 
