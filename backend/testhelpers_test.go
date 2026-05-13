@@ -84,7 +84,8 @@ func (s *memDocumentStore) resetAnalyzing() error {
 // ── fakeMappingRepository ─────────────────────────────────────────────────────
 
 // fakeMappingRepository is a simple in-memory implementation of mappingRepository.
-// Org scoping is ignored (single-org tests only).
+// Org scoping is ignored (single-org tests only). Storage is keyed by
+// (clientLabel + cpn) so client buckets are isolated, matching the pg schema.
 type fakeMappingRepository struct {
 	mu   sync.RWMutex
 	data map[string]*Mapping
@@ -94,11 +95,16 @@ func newTestMappings() *fakeMappingRepository {
 	return &fakeMappingRepository{data: make(map[string]*Mapping)}
 }
 
+func fakeKey(clientLabel, cpn string) string {
+	return normClientLabel(clientLabel) + "|" + normKey(cpn)
+}
+
 func (r *fakeMappingRepository) save(m *Mapping, _ string) error {
-	key := normKey(m.CustomerPartNumber)
-	if key == "" {
+	cpn := normKey(m.CustomerPartNumber)
+	if cpn == "" {
 		return fmt.Errorf("customerPartNumber is required")
 	}
+	key := fakeKey(m.ClientLabel, m.CustomerPartNumber)
 	now := time.Now().UTC()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -119,14 +125,19 @@ func (r *fakeMappingRepository) save(m *Mapping, _ string) error {
 	return nil
 }
 
-func (r *fakeMappingRepository) lookup(cpn, _ string) (*Mapping, bool) {
-	key := normKey(cpn)
-	if key == "" {
+// lookup returns the generic-bucket mapping (back-compat for callers that
+// haven't been updated to use lookupClient).
+func (r *fakeMappingRepository) lookup(cpn, orgID string) (*Mapping, bool) {
+	return r.lookupClient(cpn, orgID, "")
+}
+
+func (r *fakeMappingRepository) lookupClient(cpn, _, clientLabel string) (*Mapping, bool) {
+	if normKey(cpn) == "" {
 		return nil, false
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	m, ok := r.data[key]
+	m, ok := r.data[fakeKey(clientLabel, cpn)]
 	return m, ok
 }
 
@@ -140,12 +151,29 @@ func (r *fakeMappingRepository) all(_ string) []*Mapping {
 	return out
 }
 
+func (r *fakeMappingRepository) clients(_ string) []ClientMappingSummary {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	counts := map[string]int{}
+	for _, m := range r.data {
+		counts[normClientLabel(m.ClientLabel)]++
+	}
+	out := make([]ClientMappingSummary, 0, len(counts))
+	for label, n := range counts {
+		out = append(out, ClientMappingSummary{Label: label, Count: n})
+	}
+	return out
+}
+
 func (r *fakeMappingRepository) touchLastUsed(cpn, _ string) {
-	key := normKey(cpn)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if m, ok := r.data[key]; ok {
-		m.LastUsedAt = time.Now().UTC()
+	// Touch any bucket that has the CPN — touching is fire-and-forget so
+	// being slightly loose here is fine.
+	for k, m := range r.data {
+		if strings.HasSuffix(k, "|"+normKey(cpn)) {
+			m.LastUsedAt = time.Now().UTC()
+		}
 	}
 }
 

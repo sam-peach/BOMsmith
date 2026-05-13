@@ -306,14 +306,28 @@ func parseBOMRows(text string, ms mappingReader, catalog partCatalogReader) ([]B
 		enrichFromSupplierRef(&row)
 		applyMapping(&row, ms)
 
-		// Catalog matches are always surfaced as Suggestions for the operator to
-		// review — never silently committed. The system never confirms its own
-		// guesses, no matter how strong the score.
+		// Catalog matches fall into two categories:
+		//   - exact_mpn: identity match on a globally-unique manufacturer P/N.
+		//     Every catalog entry traces back to a stored mapping (which itself
+		//     traces to a human declaration), so an exact-MPN hit is the same
+		//     trust level as an applyMapping hit — fill IPN/MPN and mark Confirmed.
+		//   - fingerprint: similarity match on description attributes. The
+		//     system is inferring identity, not confirming it. Surface as a
+		//     Suggestion only — operator must confirm before it counts.
 		if row.InternalPartNumber == "" {
 			if s, err := suggestFromCatalog(&row, catalog); err != nil {
 				log.Printf("catalog suggest row %d: %v", i+1, err)
 			} else if s != nil {
-				row.Suggestion = s
+				if s.Source == "exact_mpn" {
+					row.InternalPartNumber = s.InternalPartNumber
+					row.ConfirmedFields = appendConfirmed(row.ConfirmedFields, "internalPartNumber")
+					if row.ManufacturerPartNumber == "" && s.ManufacturerPartNumber != "" {
+						row.ManufacturerPartNumber = s.ManufacturerPartNumber
+						row.ConfirmedFields = appendConfirmed(row.ConfirmedFields, "manufacturerPartNumber")
+					}
+				} else {
+					row.Suggestion = s
+				}
 			}
 		}
 

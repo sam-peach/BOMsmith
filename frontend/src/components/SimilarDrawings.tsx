@@ -14,11 +14,13 @@ export default function SimilarDrawings({ docId, onClone }: Props) {
   const [dismissed, setDismissed] = useState(false)
   const [previews,  setPreviews]  = useState<Map<string, BOMPreview | 'loading' | 'error'>>(new Map())
   const [rejected,  setRejected]  = useState(false)
+  const [expanded,  setExpanded]  = useState(false) // collapsed by default — the count alone tells the operator whether it's worth opening
 
   useEffect(() => {
     setSimilar(null)
     setDismissed(false)
     setRejected(false)
+    setExpanded(false)
     setPreviews(new Map())
     getSimilarDocuments(docId).then(setSimilar).catch(() => setSimilar([]))
   }, [docId])
@@ -87,32 +89,47 @@ export default function SimilarDrawings({ docId, onClone }: Props) {
   return (
     <div style={panelStyle}>
       <div style={headerRow}>
-        <span style={panelTitle}>
-          Similar past drawings
+        <button
+          style={titleBtn}
+          onClick={() => setExpanded(e => !e)}
+          aria-expanded={expanded}
+          title={expanded ? 'Collapse' : `Show ${similar.length} similar past drawing${similar.length === 1 ? '' : 's'}`}
+        >
+          <span style={caret(expanded)}>▸</span>
+          <span>Similar past drawings</span>
           <span style={countBadge}>{similar.length}</span>
-        </span>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button style={noneBtn} onClick={handleRejectAll} title="Dismiss all suggestions">
-            None of these match
-          </button>
-          <button style={dismissBtn} onClick={() => setDismissed(true)} aria-label="Dismiss">×</button>
-        </div>
+          {!expanded && (
+            <span style={hiddenHint}>
+              {similar.length === 1 ? '1 possible match hidden' : `${similar.length} possible matches hidden`}
+            </span>
+          )}
+        </button>
+        <button style={dismissBtn} onClick={() => setDismissed(true)} aria-label="Dismiss">×</button>
       </div>
-      <p style={panelHint}>
-        These drawings share part numbers or filename with this one. Preview before reusing.
-      </p>
-      <div style={listStyle}>
-        {similar.map(doc => (
-          <CandidateRow
-            key={doc.id}
-            doc={doc}
-            preview={previews.get(doc.id) ?? null}
-            cloning={cloning === doc.id}
-            onPreview={() => togglePreview(doc.id)}
-            onClone={() => handleClone(doc)}
-          />
-        ))}
-      </div>
+      {expanded && (
+        <>
+          <div style={hintRow}>
+            <p style={panelHint}>
+              These drawings share part numbers or filename with this one. Preview before reusing.
+            </p>
+            <button style={noneBtn} onClick={handleRejectAll} title="Dismiss all suggestions">
+              None of these match
+            </button>
+          </div>
+          <div style={listStyle}>
+            {similar.map(doc => (
+              <CandidateRow
+                key={doc.id}
+                doc={doc}
+                preview={previews.get(doc.id) ?? null}
+                cloning={cloning === doc.id}
+                onPreview={() => togglePreview(doc.id)}
+                onClone={() => handleClone(doc)}
+              />
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -236,6 +253,28 @@ const panelTitle: React.CSSProperties = {
   display: 'flex', alignItems: 'center', gap: 8,
 }
 
+const titleBtn: React.CSSProperties = {
+  ...panelTitle,
+  background: 'none', border: 'none', padding: 0,
+  cursor: 'pointer', textAlign: 'left',
+  fontFamily: font.body,
+}
+
+function caret(expanded: boolean): React.CSSProperties {
+  return {
+    display: 'inline-block', fontSize: 24, fontWeight: 700,
+    color: colors.brand,
+    width: 24, textAlign: 'center', lineHeight: 1,
+    transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+    transition: 'transform 0.15s ease',
+    flexShrink: 0,
+  }
+}
+
+const hiddenHint: React.CSSProperties = {
+  fontSize: 12, color: colors.textMuted, fontWeight: 400, marginLeft: 4,
+}
+
 const countBadge: React.CSSProperties = {
   fontSize: 11, fontWeight: 600,
   background: colors.brandLight, color: colors.brandDark,
@@ -243,7 +282,13 @@ const countBadge: React.CSSProperties = {
 }
 
 const panelHint: React.CSSProperties = {
-  margin: '0 0 12px', fontSize: 12, color: colors.textMuted, lineHeight: 1.4,
+  margin: 0, fontSize: 12, color: colors.textMuted, lineHeight: 1.4,
+  textAlign: 'center',
+}
+
+const hintRow: React.CSSProperties = {
+  display: 'flex', flexDirection: 'column', alignItems: 'center',
+  gap: 8, marginBottom: 12,
 }
 
 const dismissBtn: React.CSSProperties = {

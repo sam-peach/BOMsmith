@@ -115,9 +115,12 @@ func main() {
 	mux.HandleFunc("POST /api/documents/{id}/bom/clone-from/{sourceId}", srv.requireAuth(srv.cloneBOM))
 	mux.HandleFunc("POST /api/match-feedback", srv.requireAuth(srv.recordFeedback))
 	mux.HandleFunc("GET /api/mappings/suggest", srv.requireAuth(srv.suggestMappings)) // must be before /api/mappings
+	mux.HandleFunc("GET /api/mappings/clients", srv.requireAuth(srv.listMappingClients))
 	mux.HandleFunc("GET /api/mappings", srv.requireAuth(srv.listMappings))
-	mux.HandleFunc("POST /api/mappings/upload", srv.requireAuth(srv.uploadMappings)) // must be before /api/mappings
+	mux.HandleFunc("POST /api/mappings/upload", srv.requireAuth(srv.uploadMappings))
+	mux.HandleFunc("POST /api/mappings/import", srv.requireAuth(srv.importMappings))
 	mux.HandleFunc("POST /api/mappings", srv.requireAuth(srv.saveMapping))
+	mux.HandleFunc("PATCH /api/documents/{id}", srv.requireAuth(srv.updateDocument))
 	mux.HandleFunc("GET /api/users/me", srv.requireAuth(srv.getMe))
 	mux.HandleFunc("PUT /api/users/me/password", srv.requireAuth(srv.changePassword))
 	mux.HandleFunc("POST /api/users", srv.requireAuth(srv.createUser))

@@ -60,8 +60,8 @@ func (s *pgDocumentStore) save(doc *Document) {
 	_, err = s.db.Exec(`
 		INSERT INTO documents
 			(id, organization_id, filename, status, bom_rows, warnings, cloned_from_id, uploaded_at,
-			 file_size_bytes, analysis_duration_ms, error_message)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			 file_size_bytes, analysis_duration_ms, error_message, client_label)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (id) DO UPDATE SET
 			status               = EXCLUDED.status,
 			bom_rows             = EXCLUDED.bom_rows,
@@ -70,10 +70,11 @@ func (s *pgDocumentStore) save(doc *Document) {
 			file_size_bytes      = EXCLUDED.file_size_bytes,
 			analysis_duration_ms = EXCLUDED.analysis_duration_ms,
 			error_message        = EXCLUDED.error_message,
+			client_label         = EXCLUDED.client_label,
 			updated_at           = now()`,
 		doc.ID, doc.OrganizationID, doc.Filename, string(doc.Status),
 		string(bomJSON), string(warnJSON), clonedFrom, doc.UploadedAt,
-		doc.FileSizeBytes, analysisDuration, errorMessage,
+		doc.FileSizeBytes, analysisDuration, errorMessage, doc.ClientLabel,
 	)
 	if err != nil {
 		log.Printf("pgDocumentStore.save error for %s: %v", doc.ID, err)
@@ -89,11 +90,11 @@ func (s *pgDocumentStore) get(id string) (*Document, error) {
 
 	err := s.db.QueryRow(`
 		SELECT id, organization_id, filename, status, bom_rows, warnings, cloned_from_id, uploaded_at,
-		       file_size_bytes, analysis_duration_ms, error_message
+		       file_size_bytes, analysis_duration_ms, error_message, client_label
 		FROM documents WHERE id = $1`, id,
 	).Scan(&doc.ID, &doc.OrganizationID, &doc.Filename, &doc.Status,
 		&bomJSON, &warnJSON, &clonedFrom, &doc.UploadedAt,
-		&doc.FileSizeBytes, &analysisDuration, &errorMessage)
+		&doc.FileSizeBytes, &analysisDuration, &errorMessage, &doc.ClientLabel)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("document %q not found", id)
 	}
@@ -122,7 +123,7 @@ func (s *pgDocumentStore) get(id string) (*Document, error) {
 func (s *pgDocumentStore) listByOrg(orgID string) ([]*Document, error) {
 	rows, err := s.db.Query(`
 		SELECT id, organization_id, filename, status, bom_rows, warnings, cloned_from_id, uploaded_at,
-		       file_size_bytes, analysis_duration_ms, error_message
+		       file_size_bytes, analysis_duration_ms, error_message, client_label
 		FROM documents
 		WHERE organization_id = $1 AND status = 'done'
 		ORDER BY uploaded_at DESC
@@ -143,7 +144,7 @@ func (s *pgDocumentStore) listByOrg(orgID string) ([]*Document, error) {
 
 		if err := rows.Scan(&doc.ID, &doc.OrganizationID, &doc.Filename, &doc.Status,
 			&bomJSON, &warnJSON, &clonedFrom, &doc.UploadedAt,
-			&doc.FileSizeBytes, &analysisDuration, &errorMessage); err != nil {
+			&doc.FileSizeBytes, &analysisDuration, &errorMessage, &doc.ClientLabel); err != nil {
 			log.Printf("pgDocumentStore.listByOrg scan: %v", err)
 			continue
 		}
@@ -172,7 +173,7 @@ func (s *pgDocumentStore) listByOrg(orgID string) ([]*Document, error) {
 func (s *pgDocumentStore) list(orgID string) ([]*Document, error) {
 	rows, err := s.db.Query(`
 		SELECT id, organization_id, filename, status, bom_rows, warnings, cloned_from_id, uploaded_at,
-		       file_size_bytes, analysis_duration_ms, error_message
+		       file_size_bytes, analysis_duration_ms, error_message, client_label
 		FROM documents
 		WHERE organization_id = $1
 		ORDER BY uploaded_at DESC
@@ -193,7 +194,7 @@ func (s *pgDocumentStore) list(orgID string) ([]*Document, error) {
 
 		if err := rows.Scan(&doc.ID, &doc.OrganizationID, &doc.Filename, &doc.Status,
 			&bomJSON, &warnJSON, &clonedFrom, &doc.UploadedAt,
-			&doc.FileSizeBytes, &analysisDuration, &errorMessage); err != nil {
+			&doc.FileSizeBytes, &analysisDuration, &errorMessage, &doc.ClientLabel); err != nil {
 			log.Printf("pgDocumentStore.list scan: %v", err)
 			continue
 		}

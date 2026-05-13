@@ -574,9 +574,12 @@ func TestParseBOMRows_StrongCatalogMatch_NeverAutoFills(t *testing.T) {
 		"a system suggestion is never confirmed until a human acts on it")
 }
 
-// Exact MPN match in the catalog also surfaces as a Suggestion — even an exact
-// match is the system inferring an IPN from a part number, not a human declaring it.
-func TestParseBOMRows_ExactMPNCatalogMatch_NeverAutoFills(t *testing.T) {
+// Exact MPN match is an identity match, not similarity — the MPN is a globally
+// unique part identifier and every catalog entry traces back to a stored
+// mapping (which itself traces to a human declaration). It's therefore
+// promotable to Confirmed without violating the fail-safe principle.
+// Fingerprint matches (similarity-based) stay Suggested — see other test.
+func TestParseBOMRows_ExactMPNCatalogMatch_PromotesToConfirmed(t *testing.T) {
 	catalog := &fakeCatalogReader{
 		byMPN: map[string]*CatalogPart{
 			"MPN-EXACT": {
@@ -594,9 +597,10 @@ func TestParseBOMRows_ExactMPNCatalogMatch_NeverAutoFills(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
-	assert.Empty(t, rows[0].InternalPartNumber,
-		"even exact-MPN catalog hits must not silently populate IPN")
-	require.NotNil(t, rows[0].Suggestion)
-	assert.Equal(t, "SC-EXACT", rows[0].Suggestion.InternalPartNumber)
-	assert.Empty(t, rows[0].ConfirmedFields)
+	assert.Equal(t, "SC-EXACT", rows[0].InternalPartNumber,
+		"exact-MPN catalog hit is identity match — promote to filled IPN")
+	assert.Contains(t, rows[0].ConfirmedFields, "internalPartNumber",
+		"exact-MPN match traces to a human-declared mapping, so the IPN cell is Confirmed")
+	assert.Nil(t, rows[0].Suggestion,
+		"no Suggestion needed once the value has been promoted to a Confirmed cell")
 }

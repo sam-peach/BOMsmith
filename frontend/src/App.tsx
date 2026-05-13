@@ -4,9 +4,10 @@ import type { BOMRow, Document, DocumentStatus, ExportConfig, Mapping } from './
 import { CONFIRMABLE_FIELDS } from './types/api'
 import {
   analyzeDocument, checkAuth, deleteDocument, exportCSVUrl, exportSAPUrl, exportTSVUrl,
-  getExportConfig, listDocuments, login, logout, saveBOM, saveMapping, uploadDocument,
-  waitForAnalysis,
+  getExportConfig, listDocuments, listMappingClients, login, logout, saveBOM, saveMapping,
+  updateDocumentClient, uploadDocument, waitForAnalysis,
 } from './api/client'
+import type { ClientMappingSummary } from './types/api'
 import AdminPage from './components/AdminPage'
 import BomTable from './components/BomTable'
 import InvitePage from './components/InvitePage'
@@ -61,6 +62,8 @@ export default function App() {
   const [activeId,     setActiveId]     = useState<string | null>(null)
   const [copied,       setCopied]       = useState(false)
   const [exportConfig, setExportConfig] = useState<ExportConfig>({ columns: ['internalPartNumber', 'empty', 'quantity'], includeHeader: false })
+  const [uploadClient, setUploadClient] = useState('')
+  const [clientOptions, setClientOptions] = useState<ClientMappingSummary[]>([])
   const sem = useRef(createSemaphore(ANALYSIS_CONCURRENCY))
 
   useEffect(() => {
@@ -69,6 +72,7 @@ export default function App() {
       setIsAdmin(isAdmin)
       if (ok) {
         getExportConfig().then(setExportConfig).catch(() => {})
+        listMappingClients().then(setClientOptions).catch(() => {})
         loadPersistedDocuments()
       }
     })
@@ -167,6 +171,7 @@ export default function App() {
           bomRows:       [],
           warnings:      [],
           fileSizeBytes: 0,
+          clientLabel:   uploadClient,
         },
         rows:               [],
         uploading:          true,
@@ -191,7 +196,7 @@ export default function App() {
     const uploadedDocs: Document[] = []
     await Promise.all(placeholders.map(async ({ tempId, file }) => {
       try {
-        const doc = await uploadDocument(file)
+        const doc = await uploadDocument(file, uploadClient)
         setEntries(prev => {
           const next = new Map(prev)
           next.delete(tempId)
@@ -391,6 +396,42 @@ export default function App() {
               </p>
             </div>
 
+            {/* Optional client tag — when set, new uploads are tagged with this
+                customer label so client-scoped mappings apply on analysis. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+              <label style={{ fontSize: 12, color: colors.textMuted, minWidth: 110 }}>
+                Client (optional)
+              </label>
+              <input
+                list="client-options"
+                value={uploadClient}
+                onChange={e => setUploadClient(e.target.value)}
+                placeholder="e.g. Acme Aerospace"
+                style={{
+                  flex: 1, maxWidth: 320, padding: '6px 10px',
+                  border: `1px solid ${colors.border}`, borderRadius: radius.sm,
+                  fontSize: 13, background: colors.surface,
+                }}
+              />
+              <datalist id="client-options">
+                {clientOptions.filter(c => c.label !== '').map(c => (
+                  <option key={c.label} value={c.label}>{`${c.count} mappings`}</option>
+                ))}
+              </datalist>
+              {uploadClient && (
+                <button
+                  onClick={() => setUploadClient('')}
+                  style={{
+                    padding: '4px 10px', fontSize: 12, background: 'transparent',
+                    border: `1px solid ${colors.border}`, borderRadius: radius.sm,
+                    cursor: 'pointer', color: colors.textMuted,
+                  }}
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+
             {/* Upload area — full when empty, compact strip when docs are present */}
             {hasEntries ? (
               <UploadArea onUpload={handleUpload} loading={false} compact />
@@ -429,6 +470,19 @@ export default function App() {
                     <span style={{ fontWeight: 600, fontSize: 15, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {activeEntry.doc.filename}
                     </span>
+                    <ClientTag
+                      doc={activeEntry.doc}
+                      options={clientOptions}
+                      onChange={async label => {
+                        const updated = await updateDocumentClient(activeEntry.doc.id, label)
+                        setEntries(prev => {
+                          const next = new Map(prev)
+                          const e = next.get(activeEntry.doc.id)
+                          if (e) next.set(activeEntry.doc.id, { ...e, doc: { ...e.doc, clientLabel: updated.clientLabel } })
+                          return next
+                        })
+                      }}
+                    />
                     <StatusBadge status={activeEntry.doc.status} uploading={activeEntry.uploading} />
                     {activeEntry.doc.status === 'analyzing' && activeEntry.analysisStartedAt !== null && (
                       <ElapsedTimer startedAt={activeEntry.analysisStartedAt} estimatedMs={computeEstimate(completedJobs, activeEntry.doc.fileSizeBytes)} />
@@ -539,6 +593,70 @@ export function computeEstimate(
   const rates = valid.map(j => j.analysisDurationMs / j.fileSizeBytes).sort((a, b) => a - b)
   const p75Rate = rates[Math.floor(rates.length * 0.75)]
   return Math.round(targetFileSizeBytes * p75Rate * BUFFER)
+}
+
+// ClientTag shows the drawing's client label inline, with click-to-edit.
+// Empty label renders a subtle "Tag client" affordance so operators can add
+// one retroactively (which then narrows mapping lookups for this drawing).
+function ClientTag({
+  doc, options, onChange,
+}: {
+  doc: Document
+  options: ClientMappingSummary[]
+  onChange: (label: string) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(doc.clientLabel)
+  useEffect(() => { setDraft(doc.clientLabel) }, [doc.clientLabel])
+
+  async function commit() {
+    setEditing(false)
+    if (draft.trim() === doc.clientLabel) return
+    try { await onChange(draft.trim()) } catch { /* surface upstream */ }
+  }
+
+  if (!editing) {
+    return (
+      <button
+        onClick={() => setEditing(true)}
+        title="Tag this drawing with a client to scope mapping lookups"
+        style={{
+          padding: '2px 8px', fontSize: 11, fontWeight: 600,
+          background: doc.clientLabel ? '#e0f2fe' : '#f3f4f6',
+          color: doc.clientLabel ? '#075985' : colors.textMuted,
+          border: '1px solid ' + (doc.clientLabel ? '#7dd3fc' : colors.border),
+          borderRadius: radius.sm, cursor: 'pointer',
+        }}
+      >
+        {doc.clientLabel || 'Tag client'}
+      </button>
+    )
+  }
+
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <input
+        list="client-options-doc"
+        value={draft}
+        autoFocus
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => {
+          if (e.key === 'Enter') commit()
+          if (e.key === 'Escape') { setDraft(doc.clientLabel); setEditing(false) }
+        }}
+        style={{
+          padding: '2px 6px', fontSize: 11, width: 160,
+          border: `1px solid ${colors.brand}`, borderRadius: radius.sm,
+        }}
+      />
+      <datalist id="client-options-doc">
+        {options.filter(c => c.label !== '').map(c => (
+          <option key={c.label} value={c.label}>{`${c.count} mappings`}</option>
+        ))}
+      </datalist>
+    </span>
+  )
 }
 
 function ElapsedTimer({ startedAt, estimatedMs }: { startedAt: number; estimatedMs?: number }) {
@@ -691,7 +809,7 @@ const navHeader: React.CSSProperties = {
 }
 
 const navInner: React.CSSProperties = {
-  maxWidth: 1200, margin: '0 auto', padding: '0 24px', height: 58,
+  maxWidth: 1800, margin: '0 auto', padding: '0 24px', height: 58,
   display: 'flex', alignItems: 'center', justifyContent: 'space-between',
 }
 

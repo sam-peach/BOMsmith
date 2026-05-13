@@ -84,6 +84,7 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sd := sessionFromContext(r)
+	clientLabel := strings.TrimSpace(r.FormValue("clientLabel"))
 	doc := &Document{
 		ID:             id,
 		OrganizationID: sd.OrgID,
@@ -94,6 +95,7 @@ func (s *server) upload(w http.ResponseWriter, r *http.Request) {
 		BOMRows:        []BOMRow{},
 		Warnings:       []string{},
 		FileSizeBytes:  written,
+		ClientLabel:    clientLabel,
 	}
 	s.store.save(doc)
 	writeJSON(w, http.StatusCreated, doc)
@@ -123,7 +125,7 @@ func (s *server) analyze(w http.ResponseWriter, r *http.Request) {
 	// Capture values needed in the goroutine before the request context is gone.
 	sd := sessionFromContext(r)
 	apiKey := s.apiKey
-	mappings := &orgScopedMappings{repo: s.mappings, orgID: sd.OrgID}
+	mappings := &orgScopedMappings{repo: s.mappings, orgID: sd.OrgID, clientLabel: doc.ClientLabel}
 	var catalog partCatalogReader
 	if s.catalog != nil {
 		catalog = &orgScopedCatalog{repo: s.catalog, orgID: sd.OrgID}
@@ -442,9 +444,12 @@ func (s *server) saveBOM(w http.ResponseWriter, r *http.Request) {
 		if !slices.Contains(row.ConfirmedFields, "internalPartNumber") {
 			continue
 		}
-		// Do not overwrite existing manual or csv-upload mappings.
-		if existing, ok := s.mappings.lookup(key, sd.OrgID); ok {
-			if existing.Source == "manual" || existing.Source == "csv-upload" {
+		// Do not overwrite existing operator-curated mappings (manual,
+		// csv-upload, excel-import) in the same client bucket the auto-learn
+		// would write to.
+		if existing, ok := s.mappings.lookupClient(key, sd.OrgID, doc.ClientLabel); ok {
+			switch existing.Source {
+			case "manual", "csv-upload", "excel-import":
 				continue
 			}
 		}
@@ -455,6 +460,7 @@ func (s *server) saveBOM(w http.ResponseWriter, r *http.Request) {
 			Description:            row.Description,
 			Source:                 "inferred",
 			Confidence:             0.8,
+			ClientLabel:            doc.ClientLabel,
 		}
 		if err := s.mappings.save(m, sd.OrgID); err != nil {
 			log.Printf("auto-learn mapping save error for %q: %v", cpn, err)
@@ -596,6 +602,111 @@ func (s *server) uploadMappings(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("mapping upload: saved=%d skipped=%d", saved, skipped)
 	writeJSON(w, http.StatusOK, map[string]int{"saved": saved, "skipped": skipped})
+}
+
+// POST /api/mappings/import — structured per-client bulk import. Frontend
+// parses Excel client-side and POSTs the resulting rows here as JSON.
+//
+// Body: { clientLabel: string, rows: [ { customerPartNumber, internalPartNumber,
+//                                        manufacturerPartNumber, description } ] }
+// Response: { saved: int, overwritten: int, skipped: int }
+//
+// Imported rows overwrite any existing mapping in the same client bucket — the
+// client just supplied this file, so it's the authoritative current state.
+// The count is returned so the operator can see what changed.
+func (s *server) importMappings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ClientLabel string `json:"clientLabel"`
+		Rows        []struct {
+			CustomerPartNumber     string `json:"customerPartNumber"`
+			InternalPartNumber     string `json:"internalPartNumber"`
+			ManufacturerPartNumber string `json:"manufacturerPartNumber"`
+			Description            string `json:"description"`
+		} `json:"rows"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	sd := sessionFromContext(r)
+	clientLabel := strings.TrimSpace(req.ClientLabel)
+
+	var saved, overwritten, skipped int
+	for _, row := range req.Rows {
+		cpn := strings.TrimSpace(row.CustomerPartNumber)
+		if cpn == "" {
+			skipped++
+			continue
+		}
+		_, existed := s.mappings.lookupClient(cpn, sd.OrgID, clientLabel)
+		m := &Mapping{
+			ClientLabel:            clientLabel,
+			CustomerPartNumber:     cpn,
+			InternalPartNumber:     strings.TrimSpace(row.InternalPartNumber),
+			ManufacturerPartNumber: strings.TrimSpace(row.ManufacturerPartNumber),
+			Description:            strings.TrimSpace(row.Description),
+			Source:                 "excel-import",
+			Confidence:             1.0,
+		}
+		if err := s.mappings.save(m, sd.OrgID); err != nil {
+			log.Printf("mappings import save error for %q: %v", cpn, err)
+			skipped++
+			continue
+		}
+		if existed {
+			overwritten++
+		} else {
+			saved++
+		}
+		if s.catalog != nil {
+			go upsertCatalogFromMapping(m, s.catalog, sd.OrgID)
+		}
+	}
+	log.Printf("mappings import: client=%q saved=%d overwritten=%d skipped=%d",
+		clientLabel, saved, overwritten, skipped)
+	writeJSON(w, http.StatusOK, map[string]int{
+		"saved": saved, "overwritten": overwritten, "skipped": skipped,
+	})
+}
+
+// GET /api/mappings/clients — distinct client labels in the org with counts.
+// Used to populate the client dropdown on the upload form and the Settings
+// page client-mapping list.
+func (s *server) listMappingClients(w http.ResponseWriter, r *http.Request) {
+	sd := sessionFromContext(r)
+	clients := s.mappings.clients(sd.OrgID)
+	if clients == nil {
+		clients = []ClientMappingSummary{}
+	}
+	writeJSON(w, http.StatusOK, clients)
+}
+
+// PATCH /api/documents/{id} — retroactively tag (or untag) a drawing with a
+// client label. Body: { clientLabel: string }.
+func (s *server) updateDocument(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	doc, err := s.store.get(id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "document not found")
+		return
+	}
+	sd := sessionFromContext(r)
+	if doc.OrganizationID != "" && doc.OrganizationID != sd.OrgID {
+		writeError(w, http.StatusForbidden, "document not accessible")
+		return
+	}
+	var req struct {
+		ClientLabel *string `json:"clientLabel,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.ClientLabel != nil {
+		doc.ClientLabel = strings.TrimSpace(*req.ClientLabel)
+	}
+	s.store.save(doc)
+	writeJSON(w, http.StatusOK, doc)
 }
 
 // PUT /api/users/me/password — changes the authenticated user's password.

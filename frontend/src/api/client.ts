@@ -1,4 +1,7 @@
-import type { BOMPreview, BOMRow, Document, ErrorLogEntry, ExportConfig, MatchFeedback, Mapping, SimilarDocument } from '../types/api'
+import type {
+  BOMPreview, BOMRow, ClientMappingSummary, Document, ErrorLogEntry, ExportConfig,
+  Mapping, MappingImportResult, MappingImportRow, MatchFeedback, SimilarDocument,
+} from '../types/api'
 
 const BASE = '/api'
 
@@ -11,10 +14,23 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-export async function uploadDocument(file: File): Promise<Document> {
+export async function uploadDocument(file: File, clientLabel?: string): Promise<Document> {
   const form = new FormData()
   form.append('file', file)
+  if (clientLabel && clientLabel.trim() !== '') {
+    form.append('clientLabel', clientLabel.trim())
+  }
   const res = await fetch(`${BASE}/documents/upload`, { method: 'POST', body: form })
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function updateDocumentClient(id: string, clientLabel: string): Promise<Document> {
+  const res = await fetch(`${BASE}/documents/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientLabel }),
+  })
   if (!res.ok) throw new Error(await parseError(res))
   return res.json()
 }
@@ -125,6 +141,25 @@ export async function suggestMappings(query: string): Promise<Mapping[]> {
   if (!query.trim()) return []
   const res = await fetch(`${BASE}/mappings/suggest?q=${encodeURIComponent(query)}`)
   if (!res.ok) return []
+  return res.json()
+}
+
+export async function listMappingClients(): Promise<ClientMappingSummary[]> {
+  const res = await fetch(`${BASE}/mappings/clients`)
+  if (!res.ok) throw new Error(await parseError(res))
+  return res.json()
+}
+
+export async function importMappings(
+  clientLabel: string,
+  rows: MappingImportRow[],
+): Promise<MappingImportResult> {
+  const res = await fetch(`${BASE}/mappings/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientLabel, rows }),
+  })
+  if (!res.ok) throw new Error(await parseError(res))
   return res.json()
 }
 

@@ -272,7 +272,12 @@ Queries the part catalog for a match in two stages:
 1. **Exact MPN** — if `ManufacturerPartNumber` is set, looks for a catalog entry with that MPN. Score 1.0.
 2. **Fingerprint match** — `buildFingerprint(description)` extracts structured attributes (type, material, standard, diameter, color) using rule-based regexps. Candidates of the same part type are fetched and scored with `scoreFingerprint`. Type and diameter mismatches are fatal (return 0); standard, color, material mismatches reduce the score but do not eliminate the candidate. Only attributes present on **both** sides are scored.
 
-Any match (exact MPN or fingerprint, regardless of score) is attached to `BOMRow.Suggestion` and surfaced to the operator. **The system never silently fills `InternalPartNumber` from a catalog match** — a catalog hit is always a system guess and must be confirmed by the operator before it counts. This is the fail-safe principle: only humans confirm.
+Match treatment depends on the source:
+
+- **Exact-MPN match** (`s.Source == "exact_mpn"`) is an identity match — the MPN is a globally unique part identifier and every catalog entry traces back to a stored mapping, which itself traces to a human declaration. Treated the same as an `applyMapping` hit: `InternalPartNumber` is filled and `"internalPartNumber"` (plus `"manufacturerPartNumber"` if filled) is added to `ConfirmedFields`.
+- **Fingerprint match** (`s.Source == "fingerprint"`) is a similarity match — the system is inferring identity, not confirming it. Attached to `BOMRow.Suggestion` and surfaced for operator review; never fills `InternalPartNumber` silently.
+
+The fail-safe principle is preserved: only humans confirm. The exact-MPN promotion isn't the system confirming itself — it's the system recognising that the value already traces to a prior human declaration via the catalog → mapping chain.
 
 The catalog is populated whenever a mapping is saved (`POST /api/mappings` or auto-learn in `PUT /api/documents/{id}/bom`).
 
@@ -310,6 +315,7 @@ Document
   UploadedAt  time.Time
   BOMRows     []BOMRow
   Warnings    []string
+  ClientLabel string           — optional client tag; scopes mapping lookups during analysis
 ```
 
 ### `BOMRow` (types.go)
@@ -348,21 +354,39 @@ Quantity
 
 **Key invariant:** `Quantity.Raw` is set once during `parseQuantity` and never overwritten. All downstream logic operates on `Value`/`Unit`. If the user edits `Raw` in the UI, `parseQuantity` would need to be re-run (currently a manual operation — editing `Value`/`Unit` directly is the intended correction path).
 
+### `ClientMappingSummary` (mappings.go)
+
+```
+ClientMappingSummary
+  Label  string  — client label ("" = generic / pooled bucket)
+  Count  int     — number of mappings stored under this label in the org
+```
+
+Returned by `GET /api/mappings/clients` and used by the UI to populate the
+client-tag datalist and the Settings page client-mappings list.
+
 ### `Mapping` (types.go)
 
 ```
 Mapping
   ID                      string
+  ClientLabel             string    — "" = generic / pooled bucket; otherwise scopes to a specific client
   CustomerPartNumber      string    — lookup key (stored upper-cased)
   InternalPartNumber      string
   ManufacturerPartNumber  string
   Description             string
-  Source                  string    — "manual" | "inferred" | "csv-upload"
+  Source                  string    — "manual" | "inferred" | "csv-upload" | "excel-import"
   Confidence              float64
   LastUsedAt              time.Time
   CreatedAt               time.Time
   UpdatedAt               time.Time
 ```
+
+Mappings are stored with a unique key of `(org_id, client_label, customer_part_number)`.
+Two clients of the same org can use the same CPN for unrelated parts without
+collision — each lives in its own bucket. An empty `ClientLabel` means the
+mapping is in the generic / pooled bucket and is visible as a fallback to
+every drawing.
 
 ### `CatalogPart` (types.go)
 
@@ -415,29 +439,38 @@ The mapping system cross-references a **customer part number** (as it appears on
 
 ### Storage
 
-Mappings are persisted in the `mappings` PostgreSQL table, keyed by `(organization_id, customer_part_number)` where `customer_part_number` is stored upper-cased. All lookups normalise the key with `normKey()` before querying.
+Mappings are persisted in the `mappings` PostgreSQL table, keyed by `(organization_id, client_label, customer_part_number)` where `customer_part_number` is stored upper-cased and `client_label` is normalised to lower-case for the unique key. All lookups normalise the key with `normKey()` (CPN) and `normClientLabel()` (client) before querying.
+
+An empty `client_label` is the **generic / pooled bucket**: mappings here are visible as a fallback to drawings tagged with any client.
 
 ### Creating a mapping
 
-There are three paths:
+There are four paths:
 
-1. **Manual** — user clicks the `↗` button on a BOM row in the UI. The row's `customerPartNumber`, `internalPartNumber`, and `manufacturerPartNumber` are POSTed to `POST /api/mappings`.
+1. **Manual** — user clicks the `↗` button on a BOM row in the UI. The row's `customerPartNumber`, `internalPartNumber`, and `manufacturerPartNumber` are POSTed to `POST /api/mappings`. The mapping inherits the drawing's `clientLabel`.
 
-2. **CSV bulk import** — `POST /api/mappings/upload` accepts a CSV with headers `CustomerPartNumber`, `InternalPartNumber`, `ManufacturerPartNumber`, `Description`. Column matching is case-insensitive.
+2. **CSV bulk import** — `POST /api/mappings/upload` accepts a CSV with headers `CustomerPartNumber`, `InternalPartNumber`, `ManufacturerPartNumber`, `Description`. Column matching is case-insensitive. Optional `clientLabel` form field scopes the import.
 
-3. **Auto-learn from confirmed rows** — `PUT /api/documents/{id}/bom` inspects each saved row and persists an `inferred` mapping only when `"internalPartNumber"` is present in `ConfirmedFields`. Rows where the operator left a system-suggested IPN untouched are **not** auto-learned: silently promoting a guess into the mapping store would re-introduce the fail-safe violation this design exists to prevent.
+3. **Excel import (per-client)** — `POST /api/mappings/import` accepts a JSON body `{ clientLabel, rows: [...] }`. The frontend parses `.xlsx` client-side via SheetJS (header-synonym matching: "Customer P/N", "Customer Part Number", "Cust PN" all map to `customerPartNumber`) and POSTs the canonical rows here. Existing entries in the same `(org, client, cpn)` bucket are overwritten — the client just supplied the file, so it's the authoritative state. The response returns `{ saved, overwritten, skipped }` so operators can see what changed.
+
+4. **Auto-learn from confirmed rows** — `PUT /api/documents/{id}/bom` inspects each saved row and persists an `inferred` mapping only when `"internalPartNumber"` is present in `ConfirmedFields`. The mapping inherits the drawing's `clientLabel`. Operator-curated mappings (`manual`, `csv-upload`, `excel-import`) in the same client bucket are never overwritten by an auto-learn.
 
 ### Applying a mapping
 
-During `parseBOMRows`, `applyMapping` looks up each row's `customerPartNumber` (falling back to `manufacturerPartNumber` when CPN is absent). If a match exists:
+During `parseBOMRows`, `applyMapping` queries via `orgScopedMappings` which is constructed per-document with both `orgID` and the drawing's `clientLabel`. Lookup is two-tier:
+
+1. If the drawing has a `clientLabel`, look up `(org, client_label, cpn)` first.
+2. If no hit (or no client tag), fall back to `(org, "", cpn)` — the generic bucket.
+
+If a match exists at either tier:
 - `InternalPartNumber` is filled (if currently empty) and `"internalPartNumber"` is appended to `ConfirmedFields`
 - `ManufacturerPartNumber` is filled (if currently empty) and `"manufacturerPartNumber"` is appended to `ConfirmedFields`
 - The `mapping_applied` flag is added
 - `LastUsedAt` is updated in a background goroutine
 
-A stored mapping represents a prior human declaration (manual save, CSV import, or auto-learn from a confirmed row), so values it supplies are treated as Confirmed.
+A stored mapping represents a prior human declaration (manual save, CSV/Excel import, or auto-learn from a confirmed row), so values it supplies are treated as Confirmed.
 
-Lookup is case-insensitive (`normKey` uppercases the input before querying).
+CPN lookup is case-insensitive (`normKey` uppercases the input); client-label matching is case-insensitive + whitespace-trimmed (`normClientLabel`).
 
 ### Part catalog (`catalog.go`)
 
@@ -464,9 +497,10 @@ All routes except `/healthz` and `/api/auth/login` require a valid `sme_session`
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/documents/healthz` | Health check (public). Returns 200. |
-| `POST` | `/api/documents/upload` | Upload a PDF. Multipart `file` field. Returns `Document`. |
+| `POST` | `/api/documents/upload` | Upload a PDF. Multipart `file` field, optional `clientLabel` field. Returns `Document`. |
 | `POST` | `/api/documents/{id}/analyze` | Trigger analysis. Returns updated `Document`. |
 | `GET` | `/api/documents/{id}` | Fetch document by ID. |
+| `PATCH` | `/api/documents/{id}` | Update mutable fields. Body: `{"clientLabel":"..."}` to retag a drawing. |
 | `PUT` | `/api/documents/{id}/bom` | Save edited BOM rows. Body: `[]BOMRow`. |
 | `GET` | `/api/documents/{id}/bom.csv` | Download BOM as SAP-compatible CSV. |
 
@@ -477,8 +511,10 @@ All routes except `/healthz` and `/api/auth/login` require a valid `sme_session`
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/mappings` | List all stored mappings. |
+| `GET` | `/api/mappings/clients` | List distinct client labels in the org with mapping counts. Returns `ClientMappingSummary[]`. |
 | `POST` | `/api/mappings` | Create or update a single mapping. Body: `Mapping`. |
-| `POST` | `/api/mappings/upload` | Bulk import from CSV. Multipart `file` field. Returns `{"saved":N,"skipped":N}`. |
+| `POST` | `/api/mappings/upload` | Bulk import from CSV. Multipart `file` field, optional `clientLabel`. Returns `{"saved":N,"skipped":N}`. |
+| `POST` | `/api/mappings/import` | Structured per-client import (frontend parses Excel client-side). Body: `{"clientLabel":"...","rows":[...]}`. Returns `{"saved":N,"overwritten":N,"skipped":N}`. |
 
 ### Error format
 

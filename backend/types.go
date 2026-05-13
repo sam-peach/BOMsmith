@@ -63,6 +63,10 @@ type Document struct {
 	FileSizeBytes      int64          `json:"fileSizeBytes"`
 	AnalysisDurationMs int64          `json:"analysisDurationMs,omitempty"`
 	ErrorMessage       string         `json:"errorMessage,omitempty"`
+	// ClientLabel optionally tags the drawing with which customer it came from.
+	// When set, mapping lookups prefer the client-scoped bucket and fall back
+	// to the generic bucket. Empty = untagged (legacy behaviour preserved).
+	ClientLabel string `json:"clientLabel"`
 }
 
 // ScoreBreakdown holds per-signal contributions to the composite similarity score.
@@ -149,14 +153,19 @@ type User struct {
 
 // Mapping records a known cross-reference between a customer part number and
 // the internal/manufacturer identifiers used in-house.
+// ClientLabel scopes the mapping to a specific customer/client of the org so
+// that two clients using the same CPN for different parts do not collide.
+// An empty ClientLabel means the mapping is in the generic / pooled bucket
+// and is visible to every drawing as a fallback when no client-scoped match exists.
 type Mapping struct {
 	ID                     string    `json:"id"`
 	OrganizationID         string    `json:"-"` // server-side only
+	ClientLabel            string    `json:"clientLabel"` // "" = generic / pooled
 	CustomerPartNumber     string    `json:"customerPartNumber"`
 	InternalPartNumber     string    `json:"internalPartNumber"`
 	ManufacturerPartNumber string    `json:"manufacturerPartNumber"`
 	Description            string    `json:"description"`
-	Source                 string    `json:"source"`     // "manual" | "inferred"
+	Source                 string    `json:"source"`     // "manual" | "inferred" | "csv-upload" | "excel-import"
 	Confidence             float64   `json:"confidence"` // 0.0–1.0
 	LastUsedAt             time.Time `json:"lastUsedAt"`
 	CreatedAt              time.Time `json:"createdAt"`

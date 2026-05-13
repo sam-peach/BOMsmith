@@ -54,6 +54,28 @@ export interface Document {
   fileSizeBytes: number
   analysisDurationMs?: number
   errorMessage?: string
+  // Optional client tag — when set, mapping lookups prefer this client's
+  // bucket and fall back to the generic bucket.
+  clientLabel: string
+}
+
+export interface ClientMappingSummary {
+  label: string  // empty = generic / untagged bucket
+  count: number
+}
+
+export interface MappingImportResult {
+  saved: number
+  overwritten: number
+  skipped: number
+}
+
+// Row shape submitted to POST /api/mappings/import after client-side Excel parsing.
+export interface MappingImportRow {
+  customerPartNumber: string
+  internalPartNumber: string
+  manufacturerPartNumber: string
+  description: string
 }
 
 export interface ScoreBreakdown {
@@ -101,11 +123,12 @@ export interface ErrorLogEntry {
 
 export interface Mapping {
   id: string
+  clientLabel: string  // "" = generic / pooled bucket
   customerPartNumber: string
   internalPartNumber: string
   manufacturerPartNumber: string
   description: string
-  source: string    // "manual" | "inferred" | "csv-upload"
+  source: string    // "manual" | "inferred" | "csv-upload" | "excel-import"
   confidence: number
   lastUsedAt: string
   createdAt: string
