@@ -34,6 +34,10 @@ export default function MappingSearch() {
   useEffect(() => {
     const q = query.trim()
     setSelected(0)
+    // Bump the token unconditionally — including on the empty-query path —
+    // so any in-flight request fired by a previous keystroke is invalidated
+    // before its response can overwrite the now-cleared state.
+    const myToken = ++fetchToken.current
     if (q === '') {
       setResults([])
       setError(null)
@@ -41,7 +45,6 @@ export default function MappingSearch() {
       return
     }
     setLoading(true)
-    const myToken = ++fetchToken.current
     const handle = setTimeout(() => {
       searchMappings(q, { limit: 20 })
         .then(rs => {
