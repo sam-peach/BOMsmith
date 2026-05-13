@@ -1,5 +1,6 @@
 import { type CSSProperties, useEffect, useRef, useState } from 'react'
-import type { BOMRow, Mapping, Quantity } from '../types/api'
+import type { BOMRow, ConfirmableField, Mapping, Quantity } from '../types/api'
+import { CONFIRMABLE_FIELDS } from '../types/api'
 import { suggestMappings } from '../api/client'
 import { colors, radius } from '../theme'
 
@@ -7,6 +8,32 @@ interface Props {
   rows: BOMRow[]
   onChange: (rows: BOMRow[]) => void
   onSaveMapping: (mapping: Pick<Mapping, 'customerPartNumber' | 'internalPartNumber' | 'manufacturerPartNumber' | 'description' | 'source'>) => Promise<void>
+}
+
+// A cross-reference cell is Suggested when it has a value the system filled
+// in (LLM extraction or catalog match) that the operator has not confirmed.
+function isSuggested(row: BOMRow, field: ConfirmableField): boolean {
+  return row[field] !== '' && !row.confirmedFields.includes(field)
+}
+
+function countSuggestedCells(rows: BOMRow[]): number {
+  return rows.reduce(
+    (n, r) => n + CONFIRMABLE_FIELDS.filter(f => isSuggested(r, f)).length,
+    0,
+  )
+}
+
+function confirmField(row: BOMRow, field: ConfirmableField): BOMRow {
+  if (row.confirmedFields.includes(field)) return row
+  return { ...row, confirmedFields: [...row.confirmedFields, field] }
+}
+
+function confirmAllSuggestions(rows: BOMRow[]): BOMRow[] {
+  return rows.map(r => {
+    const toAdd = CONFIRMABLE_FIELDS.filter(f => isSuggested(r, f))
+    if (toAdd.length === 0) return r
+    return { ...r, confirmedFields: [...r.confirmedFields, ...toAdd] }
+  })
 }
 
 const COLUMNS = [
@@ -28,13 +55,43 @@ const COLUMNS = [
 
 export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
   function update(index: number, field: keyof BOMRow, value: BOMRow[keyof BOMRow]) {
-    onChange(rows.map((r, i) => (i === index ? { ...r, [field]: value } : r)))
+    onChange(rows.map((r, i) => {
+      if (i !== index) return r
+      const updated = { ...r, [field]: value }
+      // Editing a cross-reference cell is an explicit human declaration of the
+      // value — auto-confirm to keep the workflow fast. Clearing a cell drops
+      // it back out of the confirmed set so it returns to the Empty state.
+      if (CONFIRMABLE_FIELDS.includes(field as ConfirmableField)) {
+        const f = field as ConfirmableField
+        const cleared = value === ''
+        const next = cleared
+          ? updated.confirmedFields.filter(x => x !== f)
+          : updated.confirmedFields.includes(f)
+            ? updated.confirmedFields
+            : [...updated.confirmedFields, f]
+        updated.confirmedFields = next
+      }
+      return updated
+    }))
   }
 
   function updateQty(index: number, field: keyof Quantity, value: Quantity[keyof Quantity]) {
     onChange(rows.map((r, i) =>
       i === index ? { ...r, quantity: { ...r.quantity, [field]: value } } : r,
     ))
+  }
+
+  function confirmCell(index: number, field: ConfirmableField) {
+    onChange(rows.map((r, i) => (i === index ? confirmField(r, field) : r)))
+  }
+
+  function confirmRow(index: number) {
+    onChange(rows.map((r, i) => {
+      if (i !== index) return r
+      const toAdd = CONFIRMABLE_FIELDS.filter(f => isSuggested(r, f))
+      if (toAdd.length === 0) return r
+      return { ...r, confirmedFields: [...r.confirmedFields, ...toAdd] }
+    }))
   }
 
   function deleteRow(index: number) {
@@ -63,19 +120,38 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
         notes: '',
         confidence: 1,
         flags: [],
+        confirmedFields: [],
       },
     ])
   }
+
+  const suggestedCount = countSuggestedCells(rows)
 
   return (
     <div>
       <div style={toolbar}>
         <span style={{ color: '#6b7280', fontSize: 13 }}>
           {rows.length} {rows.length === 1 ? 'item' : 'items'}
+          {suggestedCount > 0 && (
+            <span style={{ marginLeft: 10, color: '#92400e' }}>
+              · {suggestedCount} {suggestedCount === 1 ? 'cell needs' : 'cells need'} review
+            </span>
+          )}
         </span>
-        <button style={addBtn} onClick={addRow}>
-          + Add row
-        </button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          {suggestedCount > 0 && (
+            <button
+              style={confirmAllBtn}
+              onClick={() => onChange(confirmAllSuggestions(rows))}
+              title="Mark every system suggestion as confirmed by the operator"
+            >
+              Confirm all suggestions ({suggestedCount})
+            </button>
+          )}
+          <button style={addBtn} onClick={addRow}>
+            + Add row
+          </button>
+        </div>
       </div>
 
       <div style={{ overflowX: 'auto', border: `1px solid ${colors.border}`, borderRadius: radius.lg }}>
@@ -97,6 +173,8 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
                 index={i}
                 onUpdate={update}
                 onUpdateQty={updateQty}
+                onConfirmCell={confirmCell}
+                onConfirmRow={confirmRow}
                 onDelete={deleteRow}
                 onSaveMapping={onSaveMapping}
               />
@@ -109,12 +187,14 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
 }
 
 function BomRow({
-  row, index, onUpdate, onUpdateQty, onDelete, onSaveMapping,
+  row, index, onUpdate, onUpdateQty, onConfirmCell, onConfirmRow, onDelete, onSaveMapping,
 }: {
   row: BOMRow
   index: number
   onUpdate: (i: number, field: keyof BOMRow, value: BOMRow[keyof BOMRow]) => void
   onUpdateQty: (i: number, field: keyof Quantity, value: Quantity[keyof Quantity]) => void
+  onConfirmCell: (i: number, field: ConfirmableField) => void
+  onConfirmRow: (i: number) => void
   onDelete: (i: number) => void
   onSaveMapping: Props['onSaveMapping']
 }) {
@@ -169,6 +249,7 @@ function BomRow({
   const canSaveMapping = row.customerPartNumber.trim() !== ''
   const qtyAmbiguous = row.quantity.flags.includes('unit_ambiguous')
   const needsMapping = !row.internalPartNumber
+  const rowHasSuggestions = CONFIRMABLE_FIELDS.some(f => isSuggested(row, f))
 
   return (
     <tr style={rowTint(row)}>
@@ -220,13 +301,21 @@ function BomRow({
         />
       </td>
       <td style={td}>
-        <input className="bom-input" value={row.customerPartNumber}
-          onChange={(e) => onUpdate(index, 'customerPartNumber', e.target.value)} />
+        <SuggestableCell
+          value={row.customerPartNumber}
+          suggested={isSuggested(row, 'customerPartNumber')}
+          onChange={v => onUpdate(index, 'customerPartNumber', v)}
+          onConfirm={() => onConfirmCell(index, 'customerPartNumber')}
+        />
       </td>
       <td style={{ ...td, position: 'relative' }} ref={suggestRef}>
         <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
-          <input className="bom-input" value={row.internalPartNumber}
-            onChange={(e) => onUpdate(index, 'internalPartNumber', e.target.value)} />
+          <SuggestableCell
+            value={row.internalPartNumber}
+            suggested={isSuggested(row, 'internalPartNumber')}
+            onChange={v => onUpdate(index, 'internalPartNumber', v)}
+            onConfirm={() => onConfirmCell(index, 'internalPartNumber')}
+          />
           {needsMapping && (
             <button
               onClick={handleSuggest}
@@ -237,6 +326,24 @@ function BomRow({
             </button>
           )}
         </div>
+        {row.suggestion && needsMapping && !showSuggestions && (
+          <div style={catalogHint} title={row.suggestion.matchReasons.join(', ')}>
+            Suggests <strong>{row.suggestion.internalPartNumber}</strong>
+            <button
+              style={catalogApplyBtn}
+              onClick={() => {
+                if (row.suggestion) {
+                  onUpdate(index, 'internalPartNumber', row.suggestion.internalPartNumber)
+                  if (row.suggestion.manufacturerPartNumber && !row.manufacturerPartNumber) {
+                    onUpdate(index, 'manufacturerPartNumber', row.suggestion.manufacturerPartNumber)
+                  }
+                }
+              }}
+            >
+              Apply
+            </button>
+          </div>
+        )}
         {showSuggestions && (
           <div style={suggestPopover}>
             {suggestions.length === 0 && !loadingSuggestions && (
@@ -258,8 +365,12 @@ function BomRow({
         )}
       </td>
       <td style={td}>
-        <input className="bom-input" value={row.manufacturerPartNumber}
-          onChange={(e) => onUpdate(index, 'manufacturerPartNumber', e.target.value)} />
+        <SuggestableCell
+          value={row.manufacturerPartNumber}
+          suggested={isSuggested(row, 'manufacturerPartNumber')}
+          onChange={v => onUpdate(index, 'manufacturerPartNumber', v)}
+          onConfirm={() => onConfirmCell(index, 'manufacturerPartNumber')}
+        />
       </td>
       <td style={td}>
         <SupplierCell refCode={row.supplierReference} supplier={row.supplier} />
@@ -274,6 +385,15 @@ function BomRow({
         <FlagList flags={row.flags} />
       </td>
       <td style={{ ...td, textAlign: 'center', whiteSpace: 'nowrap' }}>
+        {rowHasSuggestions && (
+          <button
+            onClick={() => onConfirmRow(index)}
+            title="Confirm all system suggestions on this row"
+            style={confirmRowBtn}
+          >
+            ✓ Confirm
+          </button>
+        )}
         {canSaveMapping && (
           <button
             onClick={handleSaveMapping}
@@ -288,6 +408,53 @@ function BomRow({
         </button>
       </td>
     </tr>
+  )
+}
+
+// SuggestableCell renders a cross-reference cell that is either Confirmed
+// (plain) or Suggested (italic + amber background with a click-to-confirm
+// tick). Editing on blur is handled by the parent — the input always reports
+// changes via onChange so the parent's auto-confirm-on-edit can take effect.
+function SuggestableCell({
+  value, suggested, onChange, onConfirm,
+}: {
+  value: string
+  suggested: boolean
+  onChange: (v: string) => void
+  onConfirm: () => void
+}) {
+  if (!suggested) {
+    return (
+      <input
+        className="bom-input"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+      />
+    )
+  }
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2, position: 'relative' }}>
+      <input
+        className="bom-input"
+        value={value}
+        onChange={e => onChange(e.target.value)}
+        title="System suggestion — confirm or edit before export"
+        style={{
+          fontStyle: 'italic',
+          background: '#fffbeb',
+          color: '#92400e',
+          borderColor: '#fcd34d',
+        }}
+      />
+      <button
+        type="button"
+        onClick={onConfirm}
+        title="Confirm this suggestion as-is"
+        style={confirmTick}
+      >
+        ✓
+      </button>
+    </div>
   )
 }
 
@@ -369,11 +536,10 @@ function FlagList({ flags }: { flags: string[] }) {
   )
 }
 
+// Cell-level state has replaced row-level uncertainty tinting. Only quantity
+// issues still tint the row — they are not yet expressed as a cell state.
 function rowTint(row: BOMRow): CSSProperties {
-  if (row.confidence < 0.65) return { background: '#fff5f5' }
-  if (row.flags.includes('unit_ambiguous') || row.flags.includes('missing_part_number'))
-    return { background: '#fefdf5' }
-  if (row.flags.length > 0) return { background: colors.bg }
+  if (row.quantity.flags.includes('unit_ambiguous')) return { background: '#fefdf5' }
   return {}
 }
 
@@ -489,4 +655,71 @@ const suggestEmpty: CSSProperties = {
   fontSize:  12,
   color:     colors.textMuted,
   textAlign: 'center',
+}
+
+const confirmAllBtn: CSSProperties = {
+  padding:      '5px 12px',
+  fontSize:     13,
+  fontWeight:   600,
+  background:   '#fef3c7',
+  color:        '#92400e',
+  border:       '1px solid #fcd34d',
+  borderRadius: radius.sm,
+  cursor:       'pointer',
+}
+
+const confirmRowBtn: CSSProperties = {
+  padding:      '2px 8px',
+  fontSize:     11,
+  fontWeight:   600,
+  background:   '#fef3c7',
+  color:        '#92400e',
+  border:       '1px solid #fcd34d',
+  borderRadius: radius.sm,
+  cursor:       'pointer',
+  marginRight:  4,
+}
+
+const confirmTick: CSSProperties = {
+  flexShrink:   0,
+  width:        20,
+  height:       20,
+  padding:      0,
+  fontSize:     11,
+  fontWeight:   700,
+  lineHeight:   1,
+  background:   '#fef3c7',
+  color:        '#92400e',
+  border:       '1px solid #fcd34d',
+  borderRadius: radius.sm,
+  cursor:       'pointer',
+}
+
+const catalogHint: CSSProperties = {
+  position:     'absolute',
+  top:          '100%',
+  left:         0,
+  marginTop:    2,
+  padding:      '4px 8px',
+  background:   colors.brandLight,
+  color:        colors.brand,
+  border:       `1px solid ${colors.brand}`,
+  borderRadius: radius.sm,
+  fontSize:     11,
+  zIndex:       100,
+  display:      'flex',
+  alignItems:   'center',
+  gap:          6,
+  whiteSpace:   'nowrap',
+}
+
+const catalogApplyBtn: CSSProperties = {
+  padding:      '1px 6px',
+  fontSize:     11,
+  fontWeight:   600,
+  background:   colors.brand,
+  color:        '#fff',
+  border:       'none',
+  borderRadius: radius.sm,
+  cursor:       'pointer',
 }

@@ -299,23 +299,19 @@ func parseBOMRows(text string, ms mappingReader, catalog partCatalogReader) ([]B
 			Notes:                  r.Notes,
 			Confidence:             r.Confidence,
 			Flags:                  r.Flags,
+			ConfirmedFields:        []string{},
 		}
 
 		detectSupplier(&row)
 		enrichFromSupplierRef(&row)
 		applyMapping(&row, ms)
 
-		// Catalog suggestion: only run when no IPN was resolved by exact mapping.
+		// Catalog matches are always surfaced as Suggestions for the operator to
+		// review — never silently committed. The system never confirms its own
+		// guesses, no matter how strong the score.
 		if row.InternalPartNumber == "" {
 			if s, err := suggestFromCatalog(&row, catalog); err != nil {
-				// Non-fatal — log and continue without a suggestion.
 				log.Printf("catalog suggest row %d: %v", i+1, err)
-			} else if s != nil && s.Score >= catalogAutoAcceptThreshold {
-				row.InternalPartNumber = s.InternalPartNumber
-				if row.ManufacturerPartNumber == "" && s.ManufacturerPartNumber != "" {
-					row.ManufacturerPartNumber = s.ManufacturerPartNumber
-				}
-				row.Flags = appendFlag(row.Flags, "catalog_match")
 			} else if s != nil {
 				row.Suggestion = s
 			}
@@ -529,11 +525,16 @@ func applyMapping(row *BOMRow, ms mappingReader) {
 		return
 	}
 
+	// A stored mapping is a prior human declaration — fields it fills become
+	// Confirmed (operator-validated in a previous session, or imported from a
+	// client-supplied lookup table).
 	if row.InternalPartNumber == "" && m.InternalPartNumber != "" {
 		row.InternalPartNumber = m.InternalPartNumber
+		row.ConfirmedFields = appendConfirmed(row.ConfirmedFields, "internalPartNumber")
 	}
 	if row.ManufacturerPartNumber == "" && m.ManufacturerPartNumber != "" {
 		row.ManufacturerPartNumber = m.ManufacturerPartNumber
+		row.ConfirmedFields = appendConfirmed(row.ConfirmedFields, "manufacturerPartNumber")
 	}
 
 	row.Flags = appendFlag(row.Flags, "mapping_applied")
@@ -550,6 +551,20 @@ func appendFlag(flags []string, f string) []string {
 		}
 	}
 	return append(flags, f)
+}
+
+// appendConfirmed adds field to fields only if not already present. Initialises
+// a fresh slice when fields is nil so the BOM row always serialises as [] not null.
+func appendConfirmed(fields []string, field string) []string {
+	if fields == nil {
+		fields = []string{}
+	}
+	for _, existing := range fields {
+		if existing == field {
+			return fields
+		}
+	}
+	return append(fields, field)
 }
 
 // appendNote appends note to existing, separated by "; ".

@@ -8,6 +8,21 @@ export interface Quantity {
   flags: string[]
 }
 
+export interface PartSuggestion {
+  catalogPartId: string
+  internalPartNumber: string
+  manufacturerPartNumber?: string
+  score: number
+  source: string  // "exact_mpn" | "fingerprint"
+  matchReasons: string[]
+}
+
+// Cross-reference cell field names — values used in BOMRow.confirmedFields.
+export type ConfirmableField = 'customerPartNumber' | 'internalPartNumber' | 'manufacturerPartNumber'
+export const CONFIRMABLE_FIELDS: ConfirmableField[] = [
+  'customerPartNumber', 'internalPartNumber', 'manufacturerPartNumber',
+]
+
 export interface BOMRow {
   id: string
   lineNumber: number
@@ -22,6 +37,10 @@ export interface BOMRow {
   notes: string
   confidence: number  // 0.0–1.0
   flags: string[]
+  suggestion?: PartSuggestion
+  // Cells (by JSON field name) the operator or a stored mapping has confirmed.
+  // A non-empty cell not in this list is a system Suggestion awaiting review.
+  confirmedFields: string[]
 }
 
 export interface Document {

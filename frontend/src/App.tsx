@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import type { BOMRow, Document, DocumentStatus, ExportConfig, Mapping } from './types/api'
+import { CONFIRMABLE_FIELDS } from './types/api'
 import {
   analyzeDocument, checkAuth, deleteDocument, exportCSVUrl, exportSAPUrl, exportTSVUrl,
   getExportConfig, listDocuments, login, logout, saveBOM, saveMapping, uploadDocument,
@@ -446,6 +447,16 @@ export default function App() {
                     )}
                     {hasResults && (
                       <>
+                        {(() => {
+                          const n = activeEntry.rows.reduce((sum, r) =>
+                            sum + CONFIRMABLE_FIELDS.filter(f => r[f] !== '' && !r.confirmedFields.includes(f)).length, 0)
+                          return n > 0 ? (
+                            <span title="Cells the system filled in that are still awaiting operator confirmation"
+                              style={{ fontSize: 12, color: '#92400e', alignSelf: 'center' }}>
+                              ⚠ {n} {n === 1 ? 'cell needs' : 'cells need'} review
+                            </span>
+                          ) : null
+                        })()}
                         <button
                           style={activeEntry.saved ? savedBtn : secondaryBtn}
                           onClick={() => handleSave(activeEntry.doc.id, activeEntry.rows)}
@@ -685,7 +696,7 @@ const navInner: React.CSSProperties = {
 }
 
 const mainStyle: React.CSSProperties = {
-  maxWidth: 1200, margin: '0 auto', padding: '36px 24px 72px',
+  maxWidth: 1800, margin: '0 auto', padding: '36px 24px 72px',
 }
 
 const queueGrid: React.CSSProperties = {

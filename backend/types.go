@@ -122,6 +122,14 @@ type BOMRow struct {
 	Confidence             float64         `json:"confidence"` // 0.0–1.0
 	Flags                  []string        `json:"flags"`
 	Suggestion             *PartSuggestion `json:"suggestion,omitempty"`
+	// ConfirmedFields lists per-cell fields whose value has been declared by a
+	// human — operator (edit/click-to-confirm) or client (imported mapping).
+	// Values not in this list are Suggestions: the system filled them in but
+	// they have not been validated. Field names match the BOMRow JSON tags
+	// ("customerPartNumber", "internalPartNumber", "manufacturerPartNumber").
+	// Always serialised (even when empty) so the frontend can distinguish
+	// "system guessed" from "human said so" without a null check.
+	ConfirmedFields []string `json:"confirmedFields"`
 }
 
 type Organization struct {

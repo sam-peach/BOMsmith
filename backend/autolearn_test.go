@@ -27,6 +27,7 @@ func TestSaveBOM_AutoLearnCreatesMapping(t *testing.T) {
 			ManufacturerPartNumber: "MPN-123",
 			Quantity:               Quantity{Raw: "5", Flags: []string{}},
 			Flags:                  []string{},
+			ConfirmedFields:        []string{"internalPartNumber"},
 		},
 	}
 
@@ -161,6 +162,7 @@ func TestSaveBOM_AutoLearnUsesMPNWhenNoCPN(t *testing.T) {
 			InternalPartNumber:     "CONN-001",
 			Quantity:               Quantity{Raw: "1", Flags: []string{}},
 			Flags:                  []string{},
+			ConfirmedFields:        []string{"internalPartNumber"},
 		},
 	}
 
@@ -183,6 +185,87 @@ func TestSaveBOM_AutoLearnUsesMPNWhenNoCPN(t *testing.T) {
 	}
 	if m.InternalPartNumber != "CONN-001" {
 		t.Errorf("InternalPartNumber: want %q, got %q", "CONN-001", m.InternalPartNumber)
+	}
+}
+
+// TestSaveBOM_AutoLearnSkipsUnconfirmedInternalPN verifies that an
+// internalPartNumber the system filled in but the operator never confirmed
+// must NOT become a stored mapping. This is the core fail-safe behaviour: the
+// system never promotes its own guesses into the cross-reference index.
+func TestSaveBOM_AutoLearnSkipsUnconfirmedInternalPN(t *testing.T) {
+	srv, token := newSettingsServer(t)
+	doc := &Document{ID: "doc-uc-1", Filename: "test.pdf", BOMRows: []BOMRow{}}
+	srv.store.save(doc)
+
+	rows := []BOMRow{
+		{
+			ID:                     "r1",
+			LineNumber:             1,
+			Description:            "Red wire",
+			CustomerPartNumber:     "CBL-RED",
+			InternalPartNumber:     "W-R-GUESS", // present but never confirmed by operator
+			ManufacturerPartNumber: "MPN-GUESS",
+			Quantity:               Quantity{Raw: "1", Flags: []string{}},
+			Flags:                  []string{},
+			ConfirmedFields:        []string{}, // no fields confirmed
+		},
+	}
+
+	body, _ := json.Marshal(rows)
+	req := authedRequest(http.MethodPut, "/api/documents/doc-uc-1/bom", string(body), token)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "doc-uc-1")
+	w := httptest.NewRecorder()
+	srv.saveBOM(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	all := srv.mappings.all("org-1")
+	if len(all) != 0 {
+		t.Errorf("expected 0 mappings (IPN unconfirmed), got %d", len(all))
+	}
+}
+
+// TestSaveBOM_AutoLearnPersistsConfirmedInternalPN is the positive case:
+// once the operator confirms the IPN cell, the mapping is auto-learned.
+func TestSaveBOM_AutoLearnPersistsConfirmedInternalPN(t *testing.T) {
+	srv, token := newSettingsServer(t)
+	doc := &Document{ID: "doc-uc-2", Filename: "test.pdf", BOMRows: []BOMRow{}}
+	srv.store.save(doc)
+
+	rows := []BOMRow{
+		{
+			ID:                     "r1",
+			LineNumber:             1,
+			Description:            "Red wire",
+			CustomerPartNumber:     "CBL-RED",
+			InternalPartNumber:     "W-R-035",
+			ManufacturerPartNumber: "MPN-123",
+			Quantity:               Quantity{Raw: "5", Flags: []string{}},
+			Flags:                  []string{},
+			ConfirmedFields:        []string{"internalPartNumber"},
+		},
+	}
+
+	body, _ := json.Marshal(rows)
+	req := authedRequest(http.MethodPut, "/api/documents/doc-uc-2/bom", string(body), token)
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "doc-uc-2")
+	w := httptest.NewRecorder()
+	srv.saveBOM(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	m, ok := srv.mappings.lookup("CBL-RED", "org-1")
+	if !ok {
+		t.Fatal("expected mapping after IPN confirmation")
+	}
+	if m.InternalPartNumber != "W-R-035" {
+		t.Errorf("InternalPartNumber: want %q, got %q", "W-R-035", m.InternalPartNumber)
 	}
 }
 

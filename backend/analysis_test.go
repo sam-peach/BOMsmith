@@ -500,3 +500,103 @@ func TestParseBOMRows_ReferenceEntryFalse_IsIncluded(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 }
+
+// ----------------------------------------------------------------------------
+// Confirmed-fields semantics — the system never silently commits its own work.
+// ----------------------------------------------------------------------------
+
+// Pure LLM extraction is "the system reading the drawing" — values may be
+// correct but they have not been declared by a human, so no field is Confirmed.
+func TestParseBOMRows_PureLLMExtraction_NoConfirmedFields(t *testing.T) {
+	input := `[{"rawLabel":"1","description":"Red wire","rawQuantity":"2","unit":"M","customerPartNumber":"CUST-RED","manufacturerPartNumber":"MPN-RED","supplierReference":"","notes":"","confidence":0.95,"flags":[]}]`
+
+	rows, _, err := parseBOMRows(input, nil, nil)
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].ConfirmedFields,
+		"LLM extraction never produces confirmed fields — humans confirm, not the system")
+}
+
+// A stored mapping is a prior human declaration ("this CPN maps to this IPN").
+// When applyMapping fires it fills IPN/MPN and those fields become Confirmed.
+func TestParseBOMRows_MappingMatch_ConfirmsFilledFields(t *testing.T) {
+	ms := newTestMappingReader()
+	ms.add(&Mapping{
+		CustomerPartNumber:     "CUST-RED",
+		InternalPartNumber:     "SC-001",
+		ManufacturerPartNumber: "MPN-001",
+	})
+
+	input := `[{"rawLabel":"1","description":"Red wire","rawQuantity":"2","unit":"M","customerPartNumber":"CUST-RED","manufacturerPartNumber":"","supplierReference":"","notes":"","confidence":0.9,"flags":[]}]`
+
+	rows, _, err := parseBOMRows(input, ms, nil)
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, "SC-001", rows[0].InternalPartNumber)
+	assert.Equal(t, "MPN-001", rows[0].ManufacturerPartNumber)
+	assert.Contains(t, rows[0].ConfirmedFields, "internalPartNumber",
+		"mapping-filled IPN was declared by a human in a prior session")
+	assert.Contains(t, rows[0].ConfirmedFields, "manufacturerPartNumber",
+		"mapping-filled MPN was declared by a human in a prior session")
+}
+
+// A catalog fingerprint match is a "system guess" no matter how strong.
+// It must surface as a Suggestion only — never auto-fill IPN, never confirm.
+func TestParseBOMRows_StrongCatalogMatch_NeverAutoFills(t *testing.T) {
+	catalog := &fakeCatalogReader{
+		byType: map[string][]*CatalogPart{
+			"wire": {{
+				ID:                     "cat-1",
+				InternalPartNumber:     "SC-AUTO",
+				ManufacturerPartNumber: "MPN-AUTO",
+				Fingerprint: PartFingerprint{
+					Type: "wire", Diameter: "0.20mm", Standard: "bs4808", Color: "blue", Material: "pvc",
+				},
+			}},
+		},
+	}
+
+	input := `[{"rawLabel":"1","description":"Blue PVC BS4808 wire 0.20mm","rawQuantity":"2","unit":"M","customerPartNumber":"","manufacturerPartNumber":"","supplierReference":"","notes":"","confidence":0.9,"flags":[]}]`
+
+	rows, _, err := parseBOMRows(input, nil, catalog)
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].InternalPartNumber,
+		"catalog matches must never silently populate InternalPartNumber, no matter the score")
+	require.NotNil(t, rows[0].Suggestion, "strong match should still surface as a Suggestion")
+	assert.Equal(t, "SC-AUTO", rows[0].Suggestion.InternalPartNumber)
+	assert.NotContains(t, rows[0].Flags, "catalog_match",
+		"catalog_match flag indicates silent commit — should not be set when the system stops auto-accepting")
+	assert.Empty(t, rows[0].ConfirmedFields,
+		"a system suggestion is never confirmed until a human acts on it")
+}
+
+// Exact MPN match in the catalog also surfaces as a Suggestion — even an exact
+// match is the system inferring an IPN from a part number, not a human declaring it.
+func TestParseBOMRows_ExactMPNCatalogMatch_NeverAutoFills(t *testing.T) {
+	catalog := &fakeCatalogReader{
+		byMPN: map[string]*CatalogPart{
+			"MPN-EXACT": {
+				ID:                     "cat-2",
+				InternalPartNumber:     "SC-EXACT",
+				ManufacturerPartNumber: "MPN-EXACT",
+				Fingerprint:            PartFingerprint{Type: "wire", Diameter: "0.20mm"},
+			},
+		},
+	}
+
+	input := `[{"rawLabel":"1","description":"Wire","rawQuantity":"1","unit":"M","customerPartNumber":"","manufacturerPartNumber":"MPN-EXACT","supplierReference":"","notes":"","confidence":0.9,"flags":[]}]`
+
+	rows, _, err := parseBOMRows(input, nil, catalog)
+
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Empty(t, rows[0].InternalPartNumber,
+		"even exact-MPN catalog hits must not silently populate IPN")
+	require.NotNil(t, rows[0].Suggestion)
+	assert.Equal(t, "SC-EXACT", rows[0].Suggestion.InternalPartNumber)
+	assert.Empty(t, rows[0].ConfirmedFields)
+}

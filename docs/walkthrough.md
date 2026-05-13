@@ -263,19 +263,16 @@ If a supplier reference exists but no manufacturer part number was found, a plac
 
 #### d) `applyMapping(row, mappingReader)`
 
-Checks the mappings table for a known cross-reference keyed on `customerPartNumber` (or `manufacturerPartNumber` when CPN is absent), case-insensitive. If found, fills in `InternalPartNumber` and/or `ManufacturerPartNumber` from the stored mapping. `LastUsedAt` is updated asynchronously (fire-and-forget goroutine).
+Checks the mappings table for a known cross-reference keyed on `customerPartNumber` (or `manufacturerPartNumber` when CPN is absent), case-insensitive. If found, fills in `InternalPartNumber` and/or `ManufacturerPartNumber` from the stored mapping. Any field filled by a mapping is added to `BOMRow.ConfirmedFields` — a stored mapping is a prior human declaration, so fields it supplies are **Confirmed**, not Suggested. `LastUsedAt` is updated asynchronously (fire-and-forget goroutine).
 
 #### e) `suggestFromCatalog(row, catalog)` — only runs when `InternalPartNumber` is still empty
 
 Queries the part catalog for a match in two stages:
 
-1. **Exact MPN** — if `ManufacturerPartNumber` is set, looks for a catalog entry with that MPN. Score 1.0; IPN is auto-applied.
+1. **Exact MPN** — if `ManufacturerPartNumber` is set, looks for a catalog entry with that MPN. Score 1.0.
 2. **Fingerprint match** — `buildFingerprint(description)` extracts structured attributes (type, material, standard, diameter, color) using rule-based regexps. Candidates of the same part type are fetched and scored with `scoreFingerprint`. Type and diameter mismatches are fatal (return 0); standard, color, material mismatches reduce the score but do not eliminate the candidate. Only attributes present on **both** sides are scored.
 
-Score thresholds:
-- `≥ 0.90` — auto-accept: IPN filled, `catalog_match` flag added, no suggestion shown.
-- `0.50–0.89` — `BOMRow.Suggestion` populated; frontend shows accept/reject UI (Phase 2).
-- `< 0.50` — no suggestion.
+Any match (exact MPN or fingerprint, regardless of score) is attached to `BOMRow.Suggestion` and surfaced to the operator. **The system never silently fills `InternalPartNumber` from a catalog match** — a catalog hit is always a system guess and must be confirmed by the operator before it counts. This is the fail-safe principle: only humans confirm.
 
 The catalog is populated whenever a mapping is saved (`POST /api/mappings` or auto-learn in `PUT /api/documents/{id}/bom`).
 
@@ -325,14 +322,17 @@ BOMRow
   Description             string
   Quantity                Quantity
   CustomerPartNumber      string
-  InternalPartNumber      string          — filled by mapping, catalog auto-accept, or user edit
+  InternalPartNumber      string          — filled by mapping or user edit (never by catalog match)
   ManufacturerPartNumber  string
   SupplierReference       string          — RS/Farnell order code
   Supplier                string          — "RS" | "Farnell" | "Unknown" | ""
   Notes                   string
   Confidence              float64         — 0.0–1.0
   Flags                   []string
-  Suggestion              *PartSuggestion — non-nil when catalog matched at 0.50–0.89 confidence
+  Suggestion              *PartSuggestion — non-nil when the catalog has a match awaiting operator review
+  ConfirmedFields         []string        — JSON field names ("customerPartNumber" etc.) that
+                                            a human has declared. Cells not in this list with a
+                                            value are system Suggestions awaiting confirmation.
 ```
 
 ### `Quantity` (types.go)
@@ -419,19 +419,23 @@ Mappings are persisted in the `mappings` PostgreSQL table, keyed by `(organizati
 
 ### Creating a mapping
 
-There are two paths:
+There are three paths:
 
 1. **Manual** — user clicks the `↗` button on a BOM row in the UI. The row's `customerPartNumber`, `internalPartNumber`, and `manufacturerPartNumber` are POSTed to `POST /api/mappings`.
 
 2. **CSV bulk import** — `POST /api/mappings/upload` accepts a CSV with headers `CustomerPartNumber`, `InternalPartNumber`, `ManufacturerPartNumber`, `Description`. Column matching is case-insensitive.
 
+3. **Auto-learn from confirmed rows** — `PUT /api/documents/{id}/bom` inspects each saved row and persists an `inferred` mapping only when `"internalPartNumber"` is present in `ConfirmedFields`. Rows where the operator left a system-suggested IPN untouched are **not** auto-learned: silently promoting a guess into the mapping store would re-introduce the fail-safe violation this design exists to prevent.
+
 ### Applying a mapping
 
 During `parseBOMRows`, `applyMapping` looks up each row's `customerPartNumber` (falling back to `manufacturerPartNumber` when CPN is absent). If a match exists:
-- `InternalPartNumber` is filled (if currently empty)
-- `ManufacturerPartNumber` is filled (if currently empty)
+- `InternalPartNumber` is filled (if currently empty) and `"internalPartNumber"` is appended to `ConfirmedFields`
+- `ManufacturerPartNumber` is filled (if currently empty) and `"manufacturerPartNumber"` is appended to `ConfirmedFields`
 - The `mapping_applied` flag is added
 - `LastUsedAt` is updated in a background goroutine
+
+A stored mapping represents a prior human declaration (manual save, CSV import, or auto-learn from a confirmed row), so values it supplies are treated as Confirmed.
 
 Lookup is case-insensitive (`normKey` uppercases the input before querying).
 
@@ -518,7 +522,7 @@ App.tsx state
 |-----------|---------------|
 | `LoginPage` | Sign-in form; calls `onLogin(username, password)` prop |
 | `UploadArea` | Drag-and-drop or click-to-select PDF; validates `.pdf` extension client-side |
-| `BomTable` | Editable table; each cell is an `<input>`; row-level tinting by confidence/flags |
+| `BomTable` | Editable table; each cell is an `<input>`; cell-level visual state for confirmed vs system-suggested cross-reference fields |
 | `WarningsPanel` | Dismissible warning banners surfaced from `doc.warnings` |
 
 ### BomTable internals
@@ -526,17 +530,24 @@ App.tsx state
 Each `BomRow` renders a row of `<input>` elements. Changes call back to `BomTable` via:
 - `onUpdate(index, field, value)` — for top-level `BOMRow` fields
 - `onUpdateQty(index, field, value)` — for nested `Quantity` fields
+- `onConfirmCell(index, field)` — confirm a single cross-reference cell as-is
+- `onConfirmRow(index)` — confirm every system suggestion on a row
 
 The `↗` (save mapping) button is only shown when `customerPartNumber` is non-empty. It fires `onSaveMapping` which calls `POST /api/mappings`.
 
-Row background tinting logic (`rowTint`):
+#### Cell state (cross-reference fields)
 
-| Condition | Background |
-|-----------|------------|
-| `confidence < 0.65` | Light red (`#fff5f5`) |
-| `unit_ambiguous` or `missing_part_number` flag | Light yellow (`#fffdf0`) |
-| Any other flags | Off-white (`#fafafa`) |
-| No issues | White |
+The cross-reference fields — `customerPartNumber`, `internalPartNumber`, `manufacturerPartNumber` — each have one of three visual states, derived from `BOMRow.confirmedFields`:
+
+| State | Means | Rendering |
+|-------|-------|-----------|
+| Empty | Cell has no value | Empty `<input>` |
+| Suggested | Cell has a value the system filled in but no human has confirmed | Italic, amber background, click-to-confirm tick `✓` next to the input |
+| Confirmed | Operator typed/clicked the value, OR a stored mapping supplied it | Plain `<input>` |
+
+Editing a cross-reference cell auto-confirms it on blur (typing the value is itself an explicit human declaration). Clearing a cell drops it back to Empty. The table toolbar shows a `Confirm all suggestions (n)` button when any suggestions exist, and an export-area counter (`⚠ n cells need review`) keeps the count visible at point of export.
+
+Row background tinting is now reserved for quantity ambiguity (`unit_ambiguous`) — confidence and missing-PN signals are expressed per-cell instead.
 
 ### API client (`api/client.ts`)
 

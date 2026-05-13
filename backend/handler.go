@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -422,9 +423,10 @@ func (s *server) saveBOM(w http.ResponseWriter, r *http.Request) {
 	doc.BOMRows = rows
 	s.store.save(doc)
 
-	// Auto-learn: persist inferred mappings for rows that have both a lookup key
-	// (customerPartNumber, or manufacturerPartNumber when CPN is absent) and an
-	// internalPartNumber, without overwriting manual entries.
+	// Auto-learn: persist inferred mappings for rows whose internalPartNumber
+	// the operator has explicitly confirmed. Unconfirmed IPN values are still
+	// system guesses — promoting them into the mapping store would re-introduce
+	// the silent-commit risk this design is meant to prevent.
 	sd := sessionFromContext(r)
 	for _, row := range rows {
 		cpn := strings.TrimSpace(row.CustomerPartNumber)
@@ -435,6 +437,9 @@ func (s *server) saveBOM(w http.ResponseWriter, r *http.Request) {
 			key = mpn
 		}
 		if key == "" || ipn == "" {
+			continue
+		}
+		if !slices.Contains(row.ConfirmedFields, "internalPartNumber") {
 			continue
 		}
 		// Do not overwrite existing manual or csv-upload mappings.
