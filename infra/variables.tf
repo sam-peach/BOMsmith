@@ -55,3 +55,23 @@ variable "github_repo" {
   type        = string
   default     = "sam-peach/BOMsmith"
 }
+
+variable "nexar_client_id" {
+  description = "Nexar / Octopart OAuth client id — backend auto-flips PRICING_PROVIDER to nexar when both this and nexar_client_secret are set. Leave empty to keep the mock provider in prod."
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "nexar_client_secret" {
+  description = "Nexar / Octopart OAuth client secret — paired with nexar_client_id"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "pricing_provider" {
+  description = "Optional override for PRICING_PROVIDER. Leave empty to let the backend auto-detect (\"nexar\" when credentials present, else \"mock\"). Set to \"mock\" as a kill switch for incidents."
+  type        = string
+  default     = ""
+}
