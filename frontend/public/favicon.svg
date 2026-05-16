@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">
+  <!-- BOMsmith 'B' favicon. Brand-indigo rounded square (matches LogoMark)
+       with the wordmark's 'B': same system font stack as font.brand so the
+       letterform renders identically (web fonts don't load in favicons;
+       Helvetica/Arial are system fonts, so this matches the real logo). -->
+  <rect width="32" height="32" rx="8" fill="#4f46e5"/>
+  <text x="16" y="16.5"
+        text-anchor="middle" dominant-baseline="central"
+        font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
+        font-size="22" font-weight="700" letter-spacing="-0.5"
+        fill="#ffffff">B</text>
+</svg>
