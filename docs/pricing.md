@@ -1,12 +1,22 @@
 # BOM Pricing — Design Doc
 
-**Status:** Draft (not yet implemented)
-**Last updated:** 2026-05-13
+**Status:** Implemented. **Nexar/Octopart was removed** — see banner below.
+**Last updated:** 2026-05-16
 **Author:** sam-peach + Claude
 
-This document specifies a "Price BOM" step that runs *after* the operator has completed mapping the BOM. It pulls supplier pricing, stock, and lead-time data for every line, surfaces a best-price recommendation and full breakdown per row, and falls back gracefully when no data is available.
+> **⚠️ Current state (read first).** This doc is kept as the design *record*,
+> including the original Nexar-first plan and the rationale that led to the
+> provider abstraction. **Nexar/Octopart is no longer used.** Its free tier
+> capped at 10 distinct parts and the paid tier required a business email +
+> recurring spend, so it was replaced by home-grown direct-distributor
+> providers — **Mouser, Farnell/element14, Digi-Key, TME** — composed by a
+> `multiProvider` behind the same `pricingProvider` interface. Sections
+> below that describe the Nexar GraphQL integration are **historical**; for
+> the live spec see the env-var table (§10) and `docs/walkthrough.md` §6
+> "Pricing providers". Mentions of Nexar elsewhere explain the journey, not
+> the current system.
 
-This is **design only** — no code changes yet. The point is to pressure-test the choices before committing to an implementation (and specifically to Nexar/Octopart as the data source).
+This document specifies a "Price BOM" step that runs *after* the operator has completed mapping the BOM. It pulls supplier pricing, stock, and lead-time data for every line, surfaces a best-price recommendation and full breakdown per row, and falls back gracefully when no data is available.
 
 ---
 
@@ -459,15 +469,27 @@ interface OrgSettings {
 
 | Variable | Required | Default | Notes |
 |----------|----------|---------|-------|
-| `NEXAR_CLIENT_ID` | yes (in prod) | — | OAuth client id. Backend refuses to start if missing AND `PRICING_PROVIDER=nexar`. |
-| `NEXAR_CLIENT_SECRET` | yes (in prod) | — | OAuth client secret. |
-| `NEXAR_TOKEN_URL` | no | `https://identity.nexar.com/connect/token` | Override only for testing. |
-| `NEXAR_GRAPHQL_URL` | no | `https://api.nexar.com/graphql` | Override only for testing. |
-| `PRICING_PROVIDER` | no | `nexar` | One of `nexar` / `mock` / `csv-only`. `mock` returns canned data with no network calls (for dev without API credentials). |
-| `PRICING_CACHE_TTL_HOURS` | no | `24` | TTL for `part_prices` rows. |
-| `PRICING_NEXAR_CONCURRENCY` | no | `8` | Max in-flight Nexar calls per pricing run. |
+_This is the **live** spec (supersedes the historical Nexar sections above)._
 
-The `PRICING_PROVIDER=mock` mode is the pricing-pipeline equivalent of `mockAnalysis()` — lets a developer run the full UX flow with zero Nexar credentials, by reading canned offers from `backend/testdata/mock_prices.json`.
+| Variable | Required | Default | Notes |
+|----------|----------|---------|-------|
+| `PRICING_PROVIDER` | no | `auto` | Empty/`auto`/`multi` composes every credentialed provider. A single name (`mouser`/`farnell`/`digikey`/`tme`) pins one source. `mock` = canned fixtures; `csv-only` = no upstream. Unknown/missing-cred → mock. |
+| `MOUSER_API_KEY` | no¹ | — | Mouser Search API key. `MOUSER_SEARCH_URL` overrides the endpoint (testing). |
+| `FARNELL_API_KEY` | no¹ | — | Farnell/element14 API key. `FARNELL_STORE_ID` (default `uk.farnell.com`) fixes the price currency; `FARNELL_STORE_CURRENCY`/`FARNELL_SEARCH_URL` for tests. |
+| `DIGIKEY_CLIENT_ID` / `DIGIKEY_CLIENT_SECRET` | no¹ | — | Digi-Key OAuth2. `DIGIKEY_TOKEN_URL`/`DIGIKEY_SEARCH_URL` override endpoints (testing). |
+| `TME_TOKEN` / `TME_APP_SECRET` | no¹ | — | TME token + HMAC signing secret. `TME_BASE_URL` overrides the base (testing). |
+| `PRICING_CACHE_TTL_HOURS` | no | `24` | TTL for `part_prices` rows. |
+
+¹ Each provider's credentials are individually optional. The composite uses
+whichever are present; with none, the backend falls back to `mock`. Digi-Key
+needs **both** client id and secret, and TME both token and app-secret, or
+they're skipped.
+
+The `PRICING_PROVIDER=mock` mode is the pricing-pipeline equivalent of `mockAnalysis()` — lets a developer run the full UX flow with zero credentials, returning canned `MOCK-MULTI`/`MOCK-SINGLE` offers.
+
+### Multi-provider composition
+
+With no `PRICING_PROVIDER` set, `selectPricingProvider` composes a `multiProvider` from every source whose credentials are present, in the fixed order **Mouser → Farnell → Digi-Key → TME**. The composite fans out concurrently, merges all offers, and dedupes on `(supplier, sku)` keeping the first occurrence — so the declaration order makes the dedupe deterministic regardless of which provider's goroutine finishes first. One credentialed provider is returned unwrapped (no `multi(x)` noise). Partial failure is tolerated: the run only errors (→ 502) if **every** child provider fails; one dead distributor API still returns the survivors.
 
 ---
 
@@ -519,3 +541,20 @@ These are decisions worth making before code lands. None block the doc but each 
 - Per-BOM currency override (open Q #1).
 - Stock-insufficient flag (open Q #4).
 - API spend tile (open Q #6).
+
+### Multi-provider (delivered)
+
+Driven out of the Nexar free-tier 10-part cap. Direct-distributor
+providers were added behind the existing `pricingProvider` interface —
+**Mouser** (`mouser.go`, apiKey query param), **Farnell/element14**
+(`farnell.go`, store-bound GBP), **Digi-Key** (`digikey.go`, OAuth2 +
+`X-DIGIKEY-*` locale headers, one offer per packaging variation), and
+**TME** (`tme.go`, HMAC-SHA1 signed two-step Search→Prices) — plus a
+`multiProvider` (`multiprovider.go`) that fans out concurrently, merges,
+and dedupes `(supplier, sku)` first-wins. `selectPricingProvider`
+auto-composes from whatever credentials are present (direct distributors
+before the Nexar aggregator). All five direct/composite paths are
+TDD-covered with httptest fixtures plus skipped-without-creds live
+integration tests. This makes Nexar optional rather than load-bearing:
+the free distributor APIs cover the bulk of parts with no per-call cost
+or shared quota.

@@ -45,7 +45,7 @@ export async function analyzeDocument(id: string): Promise<Document> {
 // priceBOM runs pricing for every row with a non-empty MPN. Synchronous on
 // the server side — returns the decorated Document plus a lastPricingRun
 // summary. Treat the round trip as "click-to-priced" UX; latency is
-// dominated by cache misses (one Nexar call per uncached MPN).
+// dominated by cache misses (one distributor API call per uncached MPN).
 export async function priceBOM(id: string): Promise<Document> {
   const res = await fetch(`${BASE}/documents/${id}/price`, { method: 'POST' })
   if (!res.ok) throw new Error(await parseError(res))

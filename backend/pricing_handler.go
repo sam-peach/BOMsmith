@@ -78,7 +78,7 @@ func (s *server) priceBOM(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusBadGateway, "pricing provider error")
 				return
 			}
-			run.NexarCallsMade++
+			run.ProviderCallsMade++
 			if len(fetched) > 0 {
 				if err := s.priceCache.put(mpn, fetched); err != nil {
 					log.Printf("pricing: cache put for %q on doc %s: %v", mpn, doc.ID, err)

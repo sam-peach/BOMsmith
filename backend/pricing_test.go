@@ -134,8 +134,8 @@ func TestSummariseOffers_EmptyReturnsNilAndBlank(t *testing.T) {
 }
 
 // Mock provider must return canned offers for known MPNs. This is the
-// fixture set the local dev experience relies on when no Nexar credentials
-// are available.
+// fixture set the local dev experience relies on when no distributor
+// credentials are available.
 func TestMockPricingProvider_KnownMPN(t *testing.T) {
 	p := newMockPricingProvider()
 	offers, err := p.priceByMPN(context.Background(), "MOCK-MULTI", "GBP")
@@ -163,7 +163,8 @@ func TestMockPricingProvider_UnknownMPNReturnsEmpty(t *testing.T) {
 // operator needs to compare reels vs cut-lengths or regional warehouses.
 //
 // Regression guard against the original (mpn, supplier, currency) UNIQUE
-// constraint that the live-Nexar test surfaced as too narrow.
+// constraint that live testing surfaced as too narrow (a single supplier
+// returning multiple regional/SKU offers).
 func TestPriceCache_PreservesMultipleOffersFromSameSupplier(t *testing.T) {
 	c := newMemPriceCache()
 	now := time.Now().UTC()

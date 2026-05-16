@@ -46,14 +46,18 @@ go run .
 | `AUTH_USERNAME` | Login username |
 | `AUTH_PASSWORD` | Login password |
 | `ANTHROPIC_API_KEY` | Anthropic API key — omit to use mock data |
-| `PRICING_PROVIDER` | `nexar` / `mock` / `csv-only`. Defaults to `nexar` if `NEXAR_CLIENT_ID` and `NEXAR_CLIENT_SECRET` are both set, else `mock`. |
-| `NEXAR_CLIENT_ID` | Nexar OAuth client id — required when `PRICING_PROVIDER=nexar` |
-| `NEXAR_CLIENT_SECRET` | Nexar OAuth client secret |
-| `NEXAR_TOKEN_URL` | Override the OAuth token endpoint (testing only) |
-| `NEXAR_GRAPHQL_URL` | Override the GraphQL endpoint (testing only) |
-| `PRICING_CACHE_TTL_HOURS` | `part_prices` freshness window (default `24`) |
+| `PRICING_PROVIDER` | Empty / `auto` / `multi` composes every provider that has credentials. A single name (`mouser`/`farnell`/`digikey`/`tme`) pins one source. `mock` = canned fixtures (kill switch); `csv-only` = no upstream. |
+| `MOUSER_API_KEY` | Mouser Search API key (free tier). |
+| `FARNELL_API_KEY` | Farnell / element14 API key (free tier). |
+| `FARNELL_STORE_ID` | Farnell store that fixes price currency (default `uk.farnell.com` → GBP). |
+| `DIGIKEY_CLIENT_ID` / `DIGIKEY_CLIENT_SECRET` | Digi-Key Product Information API OAuth2 (free tier). |
+| `TME_TOKEN` / `TME_APP_SECRET` | TME API token + HMAC signing secret (free tier). |
+| `*_SEARCH_URL` / `*_TOKEN_URL` / `TME_BASE_URL` | Endpoint overrides (testing only). |
+| `PRICING_CACHE_TTL_HOURS` | `part_prices` freshness window (default `24`). |
 
-When `ANTHROPIC_API_KEY` is not set the server falls back to `mockAnalysis()`, which returns a realistic cable assembly BOM and exercises all flag types without making any API calls. The same pattern applies to pricing: `PRICING_PROVIDER=mock` returns canned offers for `MOCK-MULTI` / `MOCK-SINGLE` MPNs so the full BOM-pricing UX works with no upstream credentials.
+Provider selection: with **no** PRICING_PROVIDER set, the backend composes a `multiProvider` from every source whose credentials are present, in the fixed order Mouser → Farnell → Digi-Key → TME so the cross-provider dedupe (first-wins on supplier+SKU) is deterministic. One available provider is used unwrapped; none → mock.
+
+When `ANTHROPIC_API_KEY` is not set the server falls back to `mockAnalysis()`. The same pattern applies to pricing: `PRICING_PROVIDER=mock` returns canned offers for `MOCK-MULTI` / `MOCK-SINGLE` MPNs so the full BOM-pricing UX works with no upstream credentials.
 
 ### 2. Frontend
 

@@ -50,7 +50,7 @@ func seedDoc(srv *server, doc *Document) {
 
 // Happy path: one row, one cache miss → provider is called once, the offer
 // gets cached, the row picks up best-price decoration, and the run records
-// 1 priced row + 0 unavailable + 1 nexar call + 0 cache hits.
+// 1 priced row + 0 unavailable + 1 provider call + 0 cache hits.
 func TestPriceBOM_CacheMissCallsProviderAndCaches(t *testing.T) {
 	srv, provider, cache, runs, token := newPricingServer(t)
 	provider.set("MPN-1", []SupplierOffer{{
@@ -89,7 +89,7 @@ func TestPriceBOM_CacheMissCallsProviderAndCaches(t *testing.T) {
 	assert.Equal(t, 1, latest.RowsPriced)
 	assert.Equal(t, 0, latest.RowsUnavailable)
 	assert.Equal(t, 0, latest.RowsSkipped)
-	assert.Equal(t, 1, latest.NexarCallsMade)
+	assert.Equal(t, 1, latest.ProviderCallsMade)
 	assert.Equal(t, 0, latest.CacheHits)
 }
 
@@ -118,7 +118,7 @@ func TestPriceBOM_CacheHitSkipsProvider(t *testing.T) {
 	latest, _ := runs.latest("doc-2")
 	require.NotNil(t, latest)
 	assert.Equal(t, 1, latest.CacheHits)
-	assert.Equal(t, 0, latest.NexarCallsMade)
+	assert.Equal(t, 0, latest.ProviderCallsMade)
 }
 
 // A confirmed MPN that neither cache nor provider can resolve must be

@@ -169,7 +169,7 @@ type SupplierOffer struct {
 	Stock        *int         `json:"stock,omitempty"`
 	LeadTimeDays *int         `json:"leadTimeDays,omitempty"`
 	SupplierURL  string       `json:"supplierUrl"`
-	Source       string       `json:"source"` // "nexar" | "csv" | "manual"
+	Source       string       `json:"source"` // "mouser" | "farnell" | "digikey" | "tme" | "csv" | "manual"
 	Currency     string       `json:"currency"`
 	FetchedAt    time.Time    `json:"fetchedAt"`
 }
@@ -195,15 +195,15 @@ type PricingRun struct {
 	RowsTotal        int        `json:"rowsTotal"`
 	RowsPriced       int        `json:"rowsPriced"`
 	RowsUnavailable  int        `json:"rowsUnavailable"`
-	RowsSkipped      int        `json:"rowsSkipped"`
-	NexarCallsMade   int        `json:"nexarCallsMade"`
-	CacheHits        int        `json:"cacheHits"`
+	RowsSkipped       int        `json:"rowsSkipped"`
+	ProviderCallsMade int        `json:"providerCallsMade"`
+	CacheHits         int        `json:"cacheHits"`
 	Currency         string     `json:"currency"`
 	ErrorMessage     string     `json:"errorMessage,omitempty"`
 }
 
 // FlagPricingUnavailable marks a row that was eligible for pricing
-// (non-empty MPN) but neither Nexar nor the CSV fallback had data for it.
+// (non-empty MPN) but no configured provider had data for it.
 const FlagPricingUnavailable = "pricing_unavailable"
 
 type Organization struct {

@@ -169,14 +169,19 @@ resource "aws_apprunner_service" "app" {
       image_configuration {
         port = "8080"
         runtime_environment_variables = {
-          ANTHROPIC_API_KEY   = var.anthropic_api_key
-          AUTH_USERNAME       = var.auth_username
-          AUTH_PASSWORD       = var.auth_password
-          ORG_NAME            = var.org_name
-          DATABASE_URL        = local.db_url
-          NEXAR_CLIENT_ID     = var.nexar_client_id
-          NEXAR_CLIENT_SECRET = var.nexar_client_secret
-          PRICING_PROVIDER    = var.pricing_provider
+          ANTHROPIC_API_KEY     = var.anthropic_api_key
+          AUTH_USERNAME         = var.auth_username
+          AUTH_PASSWORD         = var.auth_password
+          ORG_NAME              = var.org_name
+          DATABASE_URL          = local.db_url
+          MOUSER_API_KEY        = var.mouser_api_key
+          FARNELL_API_KEY       = var.farnell_api_key
+          FARNELL_STORE_ID      = var.farnell_store_id
+          DIGIKEY_CLIENT_ID     = var.digikey_client_id
+          DIGIKEY_CLIENT_SECRET = var.digikey_client_secret
+          TME_TOKEN             = var.tme_token
+          TME_APP_SECRET        = var.tme_app_secret
+          PRICING_PROVIDER      = var.pricing_provider
         }
       }
     }

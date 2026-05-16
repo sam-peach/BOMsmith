@@ -61,7 +61,7 @@ export interface SupplierOffer {
   stock?: number
   leadTimeDays?: number
   supplierUrl: string
-  source: string  // "nexar" | "csv" | "manual" | "mock"
+  source: string  // "mouser" | "farnell" | "digikey" | "tme" | "csv" | "manual" | "mock"
   currency: string
   fetchedAt: string
 }
@@ -85,7 +85,7 @@ export interface PricingRun {
   rowsPriced: number
   rowsUnavailable: number
   rowsSkipped: number
-  nexarCallsMade: number
+  providerCallsMade: number
   cacheHits: number
   currency: string
   errorMessage?: string

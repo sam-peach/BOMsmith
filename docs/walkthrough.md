@@ -408,7 +408,7 @@ SupplierOffer
   Stock         *int
   LeadTimeDays  *int
   SupplierURL   string       — click-through to product page
-  Source        string       — "nexar" | "csv" | "manual" | "mock"
+  Source        string       — "mouser" | "farnell" | "digikey" | "tme" | "csv" | "manual" | "mock"
   Currency      string       — ISO 4217 (always equals the run's currency)
   FetchedAt     time.Time
 
@@ -421,8 +421,8 @@ PricingRun
   RowsPriced        int    — rows that got at least one offer
   RowsUnavailable   int    — rows with an MPN but no offers anywhere
   RowsSkipped       int    — rows with no MPN
-  NexarCallsMade    int    — cache misses that hit the provider
-  CacheHits         int    — RowsPriced - NexarCallsMade
+  ProviderCallsMade int    — cache misses that hit an upstream provider
+  CacheHits         int    — RowsPriced - ProviderCallsMade
   Currency          string
   ErrorMessage      string — populated on 502/transport failure
 ```
@@ -433,6 +433,23 @@ PricingRun
 - `part_prices` is **not** org-scoped. Two orgs querying the same MPN share the cache; pricing is commodity data, mapping is the org-scoped layer.
 - Cache TTL is 24h by default (`PRICING_CACHE_TTL_HOURS`). Stale rows are treated as misses, not silently returned.
 - `pricing_unavailable` is set on a row only after a run finds no offers from any source — never on rows skipped for missing MPN.
+
+#### Pricing providers (`pricing.go`, `mouser.go`, `farnell.go`, `digikey.go`, `tme.go`, `multiprovider.go`, `supplier_names.go`)
+
+`pricingProvider` is a two-method interface (`priceByMPN`, `name`). All are direct-distributor APIs (Nexar/Octopart was removed in favour of these — free, no shared quota). Implementations:
+
+| Provider | Auth | Notes |
+|---|---|---|
+| `mouserProvider` | `apiKey` query param | Prices are locale-formatted strings (`parseLocalizedPrice`); availability/lead are free text (`parseLeadingInt`). |
+| `farnellProvider` | `callInfo.apiKey` query param | `manuPartNum:` term (not `manuPartNumber:`); currency store-bound (`uk.farnell.com` → GBP); no product URL in the API, synthesised from SKU. |
+| `digikeyProvider` | OAuth2 client-credentials (~10 min tokens) | Locale/currency via `X-DIGIKEY-*` headers; one offer per `ProductVariation`. |
+| `tmeProvider` | HMAC-SHA1 signed (`rawEncode` = RFC3986) | Two-step: `Search.json` resolves MPN→Symbol, then `GetPricesAndStocks.json`. |
+| `mockPricingProvider` | none | Canned `MOCK-MULTI`/`MOCK-SINGLE` fixtures. |
+| `multiProvider` | n/a | Fans out concurrently across children, merges, dedupes on `(supplier, sku)` first-wins, tolerates partial failure (errors only if **every** child fails). |
+
+`normaliseSupplierName` (shared, `supplier_names.go`) collapses vendor brand variants (element14/Newark → Farnell, Verical → Arrow, …) to one display name.
+
+`selectPricingProvider(env)` (in `main.go`, unit-tested via an injected env func) builds the active provider: empty/`auto`/`multi` composes every credentialed source in the fixed order Mouser→Farnell→DigiKey→TME so first-wins dedupe is deterministic; a single name pins one source; `mock`/`csv-only` are honoured verbatim; any missing-cred or typo case fails safe to mock.
 
 ```
 CatalogPart

@@ -191,50 +191,117 @@ func loadDotEnv(path string) {
 	}
 }
 
-// buildPricingProvider selects the pricing source from PRICING_PROVIDER.
-//
-//   - "nexar"     → Nexar/Octopart; requires NEXAR_CLIENT_ID + NEXAR_CLIENT_SECRET.
-//   - "mock"      → canned in-memory fixtures (local dev, no credentials).
-//   - "csv-only"  → no upstream provider; relies entirely on the future CSV
-//                   fallback path. Returns nil so /price 503s for now.
-//
-// Default is "nexar" when both credentials are present, else "mock". This
-// keeps `docker-compose up` working for a developer with no API keys.
+// buildPricingProvider wires the pricing source from the process env.
 func buildPricingProvider() pricingProvider {
-	mode := strings.ToLower(strings.TrimSpace(os.Getenv("PRICING_PROVIDER")))
-	clientID := os.Getenv("NEXAR_CLIENT_ID")
-	clientSecret := os.Getenv("NEXAR_CLIENT_SECRET")
-	if mode == "" {
-		if clientID != "" && clientSecret != "" {
-			mode = "nexar"
-		} else {
-			mode = "mock"
-		}
+	p := selectPricingProvider(os.Getenv)
+	if p == nil {
+		log.Println("pricing: provider=csv-only (no upstream; CSV fallback only)")
+	} else {
+		log.Printf("pricing: provider=%s", p.name())
 	}
+	return p
+}
+
+// selectPricingProvider is the pure (testable) core of provider selection.
+// env is an os.Getenv-shaped lookup.
+//
+// PRICING_PROVIDER modes:
+//
+//   - ""/"auto"/"multi" → compose every provider that has credentials,
+//     in fixed order (Mouser, Farnell, DigiKey, TME) so the multiProvider's
+//     first-wins dedupe is deterministic. One available provider is
+//     returned unwrapped; none → mock.
+//   - "mock"            → canned fixtures (no upstream calls).
+//   - "csv-only"        → nil (handler 503s until the CSV path exists).
+//   - a single provider name ("mouser"|"farnell"|"digikey"|"tme")
+//     → just that one, for cost/debug control, even if other creds exist.
+//     If its creds are absent, fall back to mock rather than ship a
+//     provider that 401s every call.
+//   - anything else     → mock (config typo shouldn't crash boot).
+func selectPricingProvider(env func(string) string) pricingProvider {
+	mode := strings.ToLower(strings.TrimSpace(env("PRICING_PROVIDER")))
+
 	switch mode {
 	case "mock":
-		log.Println("pricing: provider=mock (canned fixtures; no upstream calls)")
 		return newMockPricingProvider()
 	case "csv-only":
-		log.Println("pricing: provider=csv-only (no upstream; future CSV fallback only)")
 		return nil
-	case "nexar":
-		if clientID == "" || clientSecret == "" {
-			log.Println("pricing: PRICING_PROVIDER=nexar but NEXAR_CLIENT_ID/SECRET missing — falling back to mock")
-			return newMockPricingProvider()
+	}
+
+	// Build whatever real providers have complete credentials. Order here
+	// is the dedupe-precedence order: direct distributors first.
+	type built struct {
+		name string
+		p    pricingProvider
+	}
+	var avail []built
+
+	if k := env("MOUSER_API_KEY"); k != "" {
+		mp := newMouserProvider(k)
+		if v := env("MOUSER_SEARCH_URL"); v != "" {
+			mp.searchURL = v
 		}
-		p := newNexarProvider(clientID, clientSecret)
-		if v := os.Getenv("NEXAR_TOKEN_URL"); v != "" {
-			p.tokenURL = v
+		avail = append(avail, built{"mouser", mp})
+	}
+	if k := env("FARNELL_API_KEY"); k != "" {
+		fp := newFarnellProvider(k)
+		if v := env("FARNELL_STORE_ID"); v != "" {
+			fp.storeID = v
 		}
-		if v := os.Getenv("NEXAR_GRAPHQL_URL"); v != "" {
-			p.graphqlURL = v
+		if v := env("FARNELL_STORE_CURRENCY"); v != "" {
+			fp.storeCurrency = v
 		}
-		log.Println("pricing: provider=nexar")
-		return p
+		if v := env("FARNELL_SEARCH_URL"); v != "" {
+			fp.searchURL = v
+		}
+		avail = append(avail, built{"farnell", fp})
+	}
+	if id, sec := env("DIGIKEY_CLIENT_ID"), env("DIGIKEY_CLIENT_SECRET"); id != "" && sec != "" {
+		dp := newDigikeyProvider(id, sec)
+		if v := env("DIGIKEY_TOKEN_URL"); v != "" {
+			dp.tokenURL = v
+		}
+		if v := env("DIGIKEY_SEARCH_URL"); v != "" {
+			dp.searchURL = v
+		}
+		avail = append(avail, built{"digikey", dp})
+	}
+	if tok, sec := env("TME_TOKEN"), env("TME_APP_SECRET"); tok != "" && sec != "" {
+		tp := newTMEProvider(tok, sec)
+		if v := env("TME_BASE_URL"); v != "" {
+			tp.baseURL = v
+		}
+		avail = append(avail, built{"tme", tp})
+	}
+
+	// Explicit single-source override.
+	switch mode {
+	case "mouser", "farnell", "digikey", "tme":
+		for _, b := range avail {
+			if b.name == mode {
+				return b.p
+			}
+		}
+		log.Printf("pricing: PRICING_PROVIDER=%s but its credentials are missing — falling back to mock", mode)
+		return newMockPricingProvider()
+	case "", "auto", "multi":
+		// fall through to compose
 	default:
 		log.Printf("pricing: unknown PRICING_PROVIDER=%q — falling back to mock", mode)
 		return newMockPricingProvider()
+	}
+
+	switch len(avail) {
+	case 0:
+		return newMockPricingProvider()
+	case 1:
+		return avail[0].p
+	default:
+		ps := make([]pricingProvider, len(avail))
+		for i, b := range avail {
+			ps[i] = b.p
+		}
+		return newMultiProvider(ps...)
 	}
 }
 

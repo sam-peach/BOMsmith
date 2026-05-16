@@ -37,7 +37,9 @@ const defaultPricingCurrency = "GBP"
 // ── interfaces ────────────────────────────────────────────────────────────────
 
 // pricingProvider fetches live supplier offers from an upstream source.
-// Implementations: nexarProvider (production), mockPricingProvider (local dev).
+// Implementations: mouserProvider, farnellProvider, digikeyProvider,
+// tmeProvider, the multiProvider that composes them, and
+// mockPricingProvider (local dev / no credentials).
 //
 // Empty result is NOT an error — it's a normal "this MPN is outside our
 // coverage" answer. Callers distinguish via the returned slice length.
@@ -138,9 +140,10 @@ func summariseOffers(offers []SupplierOffer, qty int) (*Money, string) {
 // ── mockPricingProvider ───────────────────────────────────────────────────────
 
 // mockPricingProvider returns canned offers for development and tests.
-// Selected via PRICING_PROVIDER=mock; lets the full UX run with no Nexar
-// credentials. The fixture set is intentionally tiny — three MPNs covering
-// the common cases (multiple suppliers with breaks, single supplier, unknown).
+// Selected via PRICING_PROVIDER=mock; lets the full UX run with no
+// distributor credentials. The fixture set is intentionally tiny — three
+// MPNs covering the common cases (multiple suppliers with breaks, single
+// supplier, unknown).
 type mockPricingProvider struct {
 	now func() time.Time
 }
@@ -317,13 +320,13 @@ func (r *pgPricingRunRepository) complete(run *PricingRun) error {
 			completed_at      = $2,
 			rows_priced       = $3,
 			rows_unavailable  = $4,
-			rows_skipped      = $5,
-			nexar_calls_made  = $6,
-			cache_hits        = $7,
-			error_message     = $8
+			rows_skipped         = $5,
+			provider_calls_made  = $6,
+			cache_hits           = $7,
+			error_message        = $8
 		WHERE id = $1`,
 		run.ID, run.CompletedAt, run.RowsPriced, run.RowsUnavailable, run.RowsSkipped,
-		run.NexarCallsMade, run.CacheHits, errMsg,
+		run.ProviderCallsMade, run.CacheHits, errMsg,
 	)
 	return err
 }
@@ -337,7 +340,7 @@ func (r *pgPricingRunRepository) latest(documentID string) (*PricingRun, error) 
 	err := r.db.QueryRow(`
 		SELECT id, document_id, organization_id, started_at, completed_at,
 		       rows_total, rows_priced, rows_unavailable, rows_skipped,
-		       nexar_calls_made, cache_hits, currency, error_message
+		       provider_calls_made, cache_hits, currency, error_message
 		FROM pricing_runs
 		WHERE document_id = $1
 		ORDER BY started_at DESC
@@ -345,7 +348,7 @@ func (r *pgPricingRunRepository) latest(documentID string) (*PricingRun, error) 
 		documentID,
 	).Scan(&run.ID, &run.DocumentID, &run.OrganizationID, &run.StartedAt, &completedAt,
 		&run.RowsTotal, &run.RowsPriced, &run.RowsUnavailable, &run.RowsSkipped,
-		&run.NexarCallsMade, &run.CacheHits, &run.Currency, &errorMessage)
+		&run.ProviderCallsMade, &run.CacheHits, &run.Currency, &errorMessage)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
