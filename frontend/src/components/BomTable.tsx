@@ -8,6 +8,10 @@ interface Props {
   rows: BOMRow[]
   onChange: (rows: BOMRow[]) => void
   onSaveMapping: (mapping: Pick<Mapping, 'customerPartNumber' | 'internalPartNumber' | 'manufacturerPartNumber' | 'description' | 'source'>) => Promise<void>
+  // The id of the most recent pricing run. When it changes (a fresh
+  // "Price BOM" completed this session), every row that got pricing
+  // auto-expands so the operator sees all results at once.
+  pricedRunId?: string
 }
 
 // A cross-reference cell is Suggested when it has a value the system filled
@@ -38,21 +42,23 @@ function confirmAllSuggestions(rows: BOMRow[]): BOMRow[] {
   })
 }
 
+// `rawLabel` ("Item 1, 2, 3…") duplicated the `#` column and is dropped.
+// `Raw Qty` + `Qty` collapse into one editable Qty cell; the raw drawing
+// string survives as a tooltip (it's the source of truth — CLAUDE.md §5 —
+// and corrections go through Value/Unit, never by editing Raw).
 const COLUMNS = [
   { key: 'lineNumber',             label: '#',            width: 36  },
-  { key: 'rawLabel',               label: 'Raw Label',    width: 100 },
-  { key: 'description',            label: 'Description',  width: 220 },
-  { key: 'quantity.raw',           label: 'Raw Qty',      width: 80  },
-  { key: 'quantity.value',         label: 'Qty',          width: 64  },
+  { key: 'description',            label: 'Description',  width: 240 },
+  { key: 'quantity',               label: 'Qty',          width: 64  },
   { key: 'quantity.unit',          label: 'Unit',         width: 54  },
   { key: 'customerPartNumber',     label: 'Cust. P/N',    width: 100 },
-  { key: 'internalPartNumber',     label: 'Internal P/N', width: 110 },
+  { key: 'internalPartNumber',     label: 'Internal P/N', width: 120 },
   { key: 'manufacturerPartNumber', label: 'Mfr. P/N',     width: 150 },
   { key: 'supplierReference',      label: 'Supplier Ref', width: 110 },
   { key: 'notes',                  label: 'Notes',        width: 180 },
   { key: 'confidence',             label: 'Conf.',        width: 56  },
   { key: 'pricing',                label: 'Best Price',   width: 110 },
-  { key: 'flags',                  label: 'Flags',        width: 160 },
+  { key: 'flags',                  label: 'Flags',        width: 130 },
   { key: '_actions',               label: '',             width: 60  },
 ]
 
@@ -78,10 +84,37 @@ function priceAtQty(breaks: { quantity: number; price: number }[], qty: number):
   return best.price
 }
 
-export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
-  // Only one row's pricing panel is open at a time — opening another
-  // collapses the previous. Keeps the table compact on dense BOMs.
-  const [expandedRowId, setExpandedRowId] = useState<string | null>(null)
+function rowNeedsReview(row: BOMRow): boolean {
+  return CONFIRMABLE_FIELDS.some(f => isSuggested(row, f))
+}
+
+export default function BomTable({ rows, onChange, onSaveMapping, pricedRunId }: Props) {
+  // Set of row ids whose pricing panel is open. Multiple can be open at
+  // once: a fresh price run expands them all (see effect below); manual
+  // clicks toggle individual rows.
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set())
+  // Review-only mode collapses the table to just the rows with unconfirmed
+  // suggestions, turning "scan 38 rows" into "work a short list".
+  const [reviewOnly, setReviewOnly] = useState(false)
+
+  // Baseline = the run id at first render, so reopening an already-priced
+  // document does NOT explode every panel on load. Only a *new* run id
+  // (a price run completed this session) triggers expand-all.
+  const seenRunRef = useRef<string | undefined>(pricedRunId)
+  useEffect(() => {
+    if (pricedRunId && pricedRunId !== seenRunRef.current) {
+      seenRunRef.current = pricedRunId
+      setExpandedIds(new Set(rows.filter(r => r.pricing).map(r => r.id)))
+    }
+  }, [pricedRunId, rows])
+
+  const toggleExpand = (id: string) =>
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   function update(index: number, field: keyof BOMRow, value: BOMRow[keyof BOMRow]) {
     onChange(rows.map((r, i) => {
@@ -154,12 +187,27 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
   }
 
   const suggestedCount = countSuggestedCells(rows)
+  const reviewRowCount = rows.filter(rowNeedsReview).length
+
+  // Once everything in review-only mode is confirmed there's nothing left
+  // to show — fall back to the full list rather than an empty table.
+  useEffect(() => {
+    if (reviewOnly && reviewRowCount === 0 && rows.length > 0) setReviewOnly(false)
+  }, [reviewOnly, reviewRowCount, rows.length])
+
+  // Filter for display but keep the original index so update/confirm/delete
+  // (which key off the rows-array position) stay correct.
+  const visible = rows
+    .map((row, i) => ({ row, i }))
+    .filter(({ row }) => !reviewOnly || rowNeedsReview(row))
 
   return (
     <div>
       <div style={toolbar}>
-        <span style={{ color: '#6b7280', fontSize: 13 }}>
-          {rows.length} {rows.length === 1 ? 'item' : 'items'}
+        <span style={{ color: colors.textMuted, fontSize: 13 }}>
+          {reviewOnly
+            ? `Showing ${visible.length} of ${rows.length} ${rows.length === 1 ? 'item' : 'items'}`
+            : `${rows.length} ${rows.length === 1 ? 'item' : 'items'}`}
           {suggestedCount > 0 && (
             <span style={{ marginLeft: 10, color: '#92400e' }}>
               · {suggestedCount} {suggestedCount === 1 ? 'cell needs' : 'cells need'} review
@@ -167,13 +215,24 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
           )}
         </span>
         <div style={{ display: 'flex', gap: 8 }}>
+          {reviewRowCount > 0 && (
+            <button
+              style={reviewOnly ? reviewToggleActive : reviewToggleBtn}
+              onClick={() => setReviewOnly(v => !v)}
+              title={reviewOnly
+                ? 'Show every row'
+                : `Show only the ${reviewRowCount} row${reviewRowCount === 1 ? '' : 's'} with unconfirmed suggestions`}
+            >
+              {reviewOnly ? 'Show all rows' : `Review ${reviewRowCount}`}
+            </button>
+          )}
           {suggestedCount > 0 && (
             <button
               style={confirmAllBtn}
               onClick={() => onChange(confirmAllSuggestions(rows))}
               title="Mark every system suggestion as confirmed by the operator"
             >
-              Confirm all suggestions ({suggestedCount})
+              Confirm all ({suggestedCount})
             </button>
           )}
           <button style={addBtn} onClick={addRow}>
@@ -194,13 +253,13 @@ export default function BomTable({ rows, onChange, onSaveMapping }: Props) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row, i) => (
+            {visible.map(({ row, i }) => (
               <BomRow
                 key={row.id}
                 row={row}
                 index={i}
-                expanded={expandedRowId === row.id}
-                onToggleExpand={() => setExpandedRowId(prev => prev === row.id ? null : row.id)}
+                expanded={expandedIds.has(row.id)}
+                onToggleExpand={() => toggleExpand(row.id)}
                 onUpdate={update}
                 onUpdateQty={updateQty}
                 onConfirmCell={confirmCell}
@@ -290,31 +349,13 @@ function BomRow({
         {row.lineNumber}
       </td>
       <td style={td}>
-        <input className="bom-input" value={row.rawLabel}
-          onChange={(e) => onUpdate(index, 'rawLabel', e.target.value)} />
-      </td>
-      <td style={td}>
         <input className="bom-input" value={row.description}
           onChange={(e) => onUpdate(index, 'description', e.target.value)} />
       </td>
-      {/* Raw quantity — preserved from drawing, editable for corrections */}
+      {/* Merged quantity — parsed value is editable; the raw drawing string
+          is the source of truth (CLAUDE.md §5) so it's shown read-only as a
+          tooltip + subtle hint when it differs, never edited here. */}
       <td style={{ ...td, position: 'relative' }}>
-        <input
-          className="bom-input"
-          value={row.quantity.raw}
-          onChange={(e) => onUpdateQty(index, 'raw', e.target.value)}
-          style={{ fontFamily: 'monospace', fontSize: 12, color: qtyAmbiguous ? '#92400e' : '#374151' }}
-        />
-        {qtyAmbiguous && (
-          <span title="Unit is ambiguous — verify before use"
-            style={{ position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)',
-              color: '#f59e0b', fontSize: 14, pointerEvents: 'none' }}>
-            ⚠
-          </span>
-        )}
-      </td>
-      {/* Parsed numeric value — editable */}
-      <td style={td}>
         <input
           className="bom-input"
           type="number"
@@ -322,8 +363,16 @@ function BomRow({
           step="any"
           value={row.quantity.value ?? ''}
           onChange={(e) => onUpdateQty(index, 'value', parseFloat(e.target.value) || null)}
-          style={{ width: 56 }}
+          title={row.quantity.raw ? `From drawing: ${row.quantity.raw}` : undefined}
+          style={{ width: 52, color: qtyAmbiguous ? '#92400e' : undefined }}
         />
+        {qtyAmbiguous && (
+          <span title="Unit is ambiguous — verify before use"
+            style={{ position: 'absolute', right: 2, top: '50%', transform: 'translateY(-50%)',
+              color: '#f59e0b', fontSize: 13, pointerEvents: 'none' }}>
+            ⚠
+          </span>
+        )}
       </td>
       <td style={td}>
         <input
@@ -342,41 +391,48 @@ function BomRow({
         />
       </td>
       <td style={{ ...td, position: 'relative' }} ref={suggestRef}>
-        <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
-          <SuggestableCell
-            value={row.internalPartNumber}
-            suggested={isSuggested(row, 'internalPartNumber')}
-            onChange={v => onUpdate(index, 'internalPartNumber', v)}
-            onConfirm={() => onConfirmCell(index, 'internalPartNumber')}
-          />
-          {needsMapping && (
-            <button
-              onClick={handleSuggest}
-              title="Suggest mappings from description"
-              style={suggestBtn}
-            >
-              {loadingSuggestions ? '…' : '?'}
-            </button>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+          <div style={{ display: 'flex', gap: 3, alignItems: 'center' }}>
+            <SuggestableCell
+              value={row.internalPartNumber}
+              suggested={isSuggested(row, 'internalPartNumber')}
+              onChange={v => onUpdate(index, 'internalPartNumber', v)}
+              onConfirm={() => onConfirmCell(index, 'internalPartNumber')}
+            />
+            {needsMapping && (
+              <button
+                onClick={handleSuggest}
+                title="Suggest mappings from description"
+                style={suggestBtn}
+              >
+                {loadingSuggestions ? '…' : '?'}
+              </button>
+            )}
+          </div>
+          {/* Inline (in normal flow), constrained to the cell, so it can
+              never overlap the Mfr P/N column the way the old absolute
+              + nowrap version did. */}
+          {row.suggestion && needsMapping && !showSuggestions && (
+            <div style={catalogHint} title={row.suggestion.matchReasons.join(', ')}>
+              <span style={catalogHintText}>
+                Suggests <strong>{row.suggestion.internalPartNumber}</strong>
+              </span>
+              <button
+                style={catalogApplyBtn}
+                onClick={() => {
+                  if (row.suggestion) {
+                    onUpdate(index, 'internalPartNumber', row.suggestion.internalPartNumber)
+                    if (row.suggestion.manufacturerPartNumber && !row.manufacturerPartNumber) {
+                      onUpdate(index, 'manufacturerPartNumber', row.suggestion.manufacturerPartNumber)
+                    }
+                  }
+                }}
+              >
+                Apply
+              </button>
+            </div>
           )}
         </div>
-        {row.suggestion && needsMapping && !showSuggestions && (
-          <div style={catalogHint} title={row.suggestion.matchReasons.join(', ')}>
-            Suggests <strong>{row.suggestion.internalPartNumber}</strong>
-            <button
-              style={catalogApplyBtn}
-              onClick={() => {
-                if (row.suggestion) {
-                  onUpdate(index, 'internalPartNumber', row.suggestion.internalPartNumber)
-                  if (row.suggestion.manufacturerPartNumber && !row.manufacturerPartNumber) {
-                    onUpdate(index, 'manufacturerPartNumber', row.suggestion.manufacturerPartNumber)
-                  }
-                }
-              }}
-            >
-              Apply
-            </button>
-          </div>
-        )}
         {showSuggestions && (
           <div style={suggestPopover}>
             {suggestions.length === 0 && !loadingSuggestions && (
@@ -462,9 +518,10 @@ function BomRow({
 }
 
 // SuggestableCell renders a cross-reference cell that is either Confirmed
-// (plain) or Suggested (italic + amber background with a click-to-confirm
-// tick). Editing on blur is handled by the parent — the input always reports
-// changes via onChange so the parent's auto-confirm-on-edit can take effect.
+// (plain) or Suggested. Suggested no longer fills the cell amber — that
+// made every unconfirmed cell shout at the same volume as real problems.
+// Instead a thin amber left-accent marks it as unverified, with a quiet
+// click-to-confirm tick. Saturated colour is reserved for genuine issues.
 function SuggestableCell({
   value, suggested, onChange, onConfirm,
 }: {
@@ -483,18 +540,13 @@ function SuggestableCell({
     )
   }
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 2, position: 'relative' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
       <input
         className="bom-input"
         value={value}
         onChange={e => onChange(e.target.value)}
         title="System suggestion — confirm or edit before export"
-        style={{
-          fontStyle: 'italic',
-          background: '#fffbeb',
-          color: '#92400e',
-          borderColor: '#fcd34d',
-        }}
+        style={{ borderLeft: '2px solid #f59e0b', color: '#78533b' }}
       />
       <button
         type="button"
@@ -675,7 +727,7 @@ function PricingDetailsPanel({ pricing, mpn, rowQty }: { pricing: RowPricing; mp
     : '—'
 
   return (
-    <div style={panelWrap}>
+    <div className="row-open" style={panelWrap}>
       <div style={panelHeader}>
         <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{mpn || 'unknown MPN'}</span>
         <span style={{ color: colors.textMuted }}>· {offers.length} offer{offers.length === 1 ? '' : 's'}</span>
@@ -771,24 +823,68 @@ function formatMoney(amount: number, currency: string): string {
   }
 }
 
+const FLAG_VISIBLE_CAP = 2
+
+// FlagList collapses the per-row chip wall: duplicate display labels (e.g.
+// the two distinct "no MPN" flag keys) are merged, then at most
+// FLAG_VISIBLE_CAP chips show with the remainder behind a "+N" toggle.
 function FlagList({ flags }: { flags: string[] }) {
+  const [expanded, setExpanded] = useState(false)
   if (!flags.length) return <span style={{ color: '#d1d5db', fontSize: 12 }}>—</span>
+
+  // De-dupe by the human label so synonyms don't double up.
+  const seen = new Set<string>()
+  const chips = flags
+    .map(f => {
+      const cfg = FLAG_CONFIG[f]
+      return { label: cfg ? cfg.label : f, cfg }
+    })
+    .filter(({ label }) => (seen.has(label) ? false : (seen.add(label), true)))
+
+  const shown = expanded ? chips : chips.slice(0, FLAG_VISIBLE_CAP)
+  const hidden = chips.length - shown.length
+
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
-      {flags.map((f) => {
-        const cfg = FLAG_CONFIG[f]
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3, alignItems: 'center' }}>
+      {shown.map(({ label, cfg }) => {
         const style = cfg
           ? { background: cfg.bg, color: cfg.color, fontWeight: 600 }
           : { background: '#f3f4f6', color: '#6b7280' }
         return (
-          <span key={f} style={{ padding: '1px 5px', borderRadius: 3, fontSize: 11,
+          <span key={label} style={{ padding: '1px 5px', borderRadius: 3, fontSize: 11,
             whiteSpace: 'nowrap', ...style }}>
-            {cfg ? cfg.label : f}
+            {label}
           </span>
         )
       })}
+      {hidden > 0 && !expanded && (
+        <button
+          type="button"
+          onClick={() => setExpanded(true)}
+          title={chips.slice(FLAG_VISIBLE_CAP).map(c => c.label).join(', ')}
+          style={flagMoreBtn}
+        >
+          +{hidden}
+        </button>
+      )}
+      {expanded && chips.length > FLAG_VISIBLE_CAP && (
+        <button type="button" onClick={() => setExpanded(false)} style={flagMoreBtn}>
+          less
+        </button>
+      )}
     </div>
   )
+}
+
+const flagMoreBtn: CSSProperties = {
+  padding:      '1px 5px',
+  fontSize:     11,
+  background:   'transparent',
+  color:        colors.textMuted,
+  border:       `1px solid ${colors.border}`,
+  borderRadius: 3,
+  cursor:       'pointer',
+  whiteSpace:   'nowrap',
 }
 
 // Cell-level state has replaced row-level uncertainty tinting. Only quantity
@@ -888,6 +984,22 @@ const addBtn: CSSProperties = {
   color:        colors.textMuted,
 }
 
+const reviewToggleBtn: CSSProperties = {
+  padding:      '5px 12px',
+  fontSize:     13,
+  fontWeight:   600,
+  background:   'transparent',
+  color:        '#92400e',
+  border:       '1px solid #fcd34d',
+  borderRadius: radius.sm,
+  cursor:       'pointer',
+}
+
+const reviewToggleActive: CSSProperties = {
+  ...reviewToggleBtn,
+  background: '#fef3c7',
+}
+
 const deleteBtn: CSSProperties = {
   padding:      '2px 6px',
   fontSize:     14,
@@ -981,9 +1093,9 @@ const confirmRowBtn: CSSProperties = {
   padding:      '2px 8px',
   fontSize:     11,
   fontWeight:   600,
-  background:   '#fef3c7',
-  color:        '#92400e',
-  border:       '1px solid #fcd34d',
+  background:   'transparent',
+  color:        colors.textMuted,
+  border:       `1px solid ${colors.border}`,
   borderRadius: radius.sm,
   cursor:       'pointer',
   marginRight:  4,
@@ -997,29 +1109,31 @@ const confirmTick: CSSProperties = {
   fontSize:     11,
   fontWeight:   700,
   lineHeight:   1,
-  background:   '#fef3c7',
-  color:        '#92400e',
-  border:       '1px solid #fcd34d',
+  background:   'transparent',
+  color:        colors.textSubtle,
+  border:       `1px solid ${colors.border}`,
   borderRadius: radius.sm,
   cursor:       'pointer',
 }
 
+// Inline (normal document flow), constrained to the cell width, so the
+// suggested-IPN hint can never spill over the adjacent column. The IPN
+// text truncates with an ellipsis rather than forcing the column wider.
 const catalogHint: CSSProperties = {
-  position:     'absolute',
-  top:          '100%',
-  left:         0,
-  marginTop:    2,
-  padding:      '4px 8px',
-  background:   colors.brandLight,
-  color:        colors.brand,
-  border:       `1px solid ${colors.brand}`,
-  borderRadius: radius.sm,
-  fontSize:     11,
-  zIndex:       100,
   display:      'flex',
   alignItems:   'center',
-  gap:          6,
+  gap:          5,
+  maxWidth:     '100%',
+  padding:      '2px 0',
+  fontSize:     11,
+  color:        colors.textMuted,
+}
+
+const catalogHintText: CSSProperties = {
+  overflow:     'hidden',
+  textOverflow: 'ellipsis',
   whiteSpace:   'nowrap',
+  minWidth:     0,
 }
 
 const catalogApplyBtn: CSSProperties = {

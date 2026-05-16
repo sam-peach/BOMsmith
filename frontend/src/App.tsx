@@ -576,12 +576,11 @@ export default function App() {
                           entry={activeEntry}
                           onClick={() => handlePriceBOM(activeEntry.doc.id)}
                         />
-                        <button style={copied ? savedBtn : secondaryBtn} onClick={() => handleCopyForSAP(activeEntry.rows)}>
-                          {copied ? 'Copied ✓' : 'Copy for SAP'}
-                        </button>
-                        <a href={exportSAPUrl(activeEntry.doc.id)} style={secondaryBtn} download>Export SAP</a>
-                        <a href={exportTSVUrl(activeEntry.doc.id)} style={secondaryBtn} download>Export TSV</a>
-                        <a href={exportCSVUrl(activeEntry.doc.id)} style={secondaryBtn} download>Export CSV</a>
+                        <ExportMenu
+                          docId={activeEntry.doc.id}
+                          copied={copied}
+                          onCopyForSAP={() => handleCopyForSAP(activeEntry.rows)}
+                        />
                       </>
                     )}
                   </div>
@@ -601,9 +600,10 @@ export default function App() {
                     rows={activeEntry.rows}
                     onChange={rows => handleRowsChange(activeEntry.doc.id, rows)}
                     onSaveMapping={handleSaveMapping}
+                    pricedRunId={activeEntry.doc.lastPricingRun?.id}
                   />
                 ) : activeEntry.uploading ? (
-                  <EmptyState><span className="spinner" style={{ borderTopColor: colors.brand, borderColor: colors.border }} />Uploading…</EmptyState>
+                  <EmptyState><span className="spinner" style={{ borderColor: colors.border, borderTopColor: colors.brand }} />Uploading…</EmptyState>
                 ) : activeEntry.doc.status === 'uploaded' ? (
                   <EmptyState>Ready to analyze.</EmptyState>
                 ) : activeEntry.doc.status === 'analyzing' ? (
@@ -627,6 +627,64 @@ export default function App() {
       </Routes>
     </div>
   )
+}
+
+// ── ExportMenu ───────────────────────────────────────────────────────────────
+
+// Collapses the four export-ish actions (Copy for SAP, Export SAP / TSV /
+// CSV) behind one "Export ▾" trigger so the toolbar isn't a wall of
+// equal-weight buttons. Copy-for-SAP keeps its transient "Copied ✓" state.
+function ExportMenu({ docId, copied, onCopyForSAP }: {
+  docId: string
+  copied: boolean
+  onCopyForSAP: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const wrapRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function onDown(e: MouseEvent) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [])
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative', display: 'inline-block' }}>
+      <button style={secondaryBtn} onClick={() => setOpen(v => !v)} aria-haspopup="menu" aria-expanded={open}>
+        Export ▾
+      </button>
+      {open && (
+        <div style={exportMenuPanel} role="menu">
+          <button
+            role="menuitem"
+            style={exportMenuItem}
+            onClick={() => { onCopyForSAP(); setOpen(false) }}
+          >
+            {copied ? 'Copied ✓' : 'Copy for SAP'}
+          </button>
+          <a role="menuitem" style={exportMenuItem} href={exportSAPUrl(docId)} download onClick={() => setOpen(false)}>Export SAP</a>
+          <a role="menuitem" style={exportMenuItem} href={exportTSVUrl(docId)} download onClick={() => setOpen(false)}>Export TSV</a>
+          <a role="menuitem" style={exportMenuItem} href={exportCSVUrl(docId)} download onClick={() => setOpen(false)}>Export CSV</a>
+        </div>
+      )}
+    </div>
+  )
+}
+
+const exportMenuPanel: React.CSSProperties = {
+  position: 'absolute', top: 'calc(100% + 4px)', right: 0, zIndex: 300,
+  minWidth: 168, background: colors.surface,
+  border: `1px solid ${colors.border}`, borderRadius: radius.md,
+  boxShadow: shadow.lg, overflow: 'hidden', padding: 4,
+}
+
+const exportMenuItem: React.CSSProperties = {
+  display: 'block', width: '100%', textAlign: 'left',
+  padding: '8px 12px', fontSize: 14, fontFamily: font.body,
+  background: 'transparent', border: 'none', borderRadius: radius.sm,
+  cursor: 'pointer', color: colors.text, textDecoration: 'none',
 }
 
 // ── PriceBOMButton ───────────────────────────────────────────────────────────
@@ -661,11 +719,17 @@ function PriceBOMButton({ entry, onClick }: { entry: DocEntry; onClick: () => vo
   return (
     <>
       <button
-        style={loading || !hasPriceableRow ? { ...secondaryBtn, opacity: 0.6, cursor: 'not-allowed' } : secondaryBtn}
+        style={loading || !hasPriceableRow ? { ...secondaryBtn, opacity: 0.7, cursor: loading ? 'progress' : 'not-allowed' } : secondaryBtn}
         onClick={onClick}
         disabled={loading || !hasPriceableRow}
         title={hasPriceableRow ? 'Look up supplier pricing for every row with an MPN' : 'No rows with an MPN yet — confirm an MPN on at least one row first'}
       >
+        {loading && (
+          <span
+            className="spinner"
+            style={{ borderColor: colors.borderLight, borderTopColor: colors.brand, width: 11, height: 11 }}
+          />
+        )}
         {label}
       </button>
       {summary}
@@ -841,7 +905,7 @@ function DocCard({
             {formatElapsed(doc.analysisDurationMs)}
           </span>
         )}
-        {busy && <span className="spinner" style={{ borderTopColor: colors.brand, borderColor: colors.borderLight, width: 10, height: 10 }} />}
+        {busy && <span className="spinner" style={{ borderColor: colors.borderLight, borderTopColor: colors.brand, width: 10, height: 10 }} />}
       </div>
 
       {/* Error snippet */}

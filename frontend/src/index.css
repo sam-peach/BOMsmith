@@ -150,3 +150,24 @@ body {
 .fade-up {
   animation: fadeUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
+
+/* ── Pricing-row expand ──────────────────────────────────────────────────── */
+
+@keyframes rowOpen {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.row-open {
+  animation: rowOpen 0.18s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-open { animation: none; }
+}
