@@ -45,3 +45,37 @@ resource "aws_route53_record" "www" {
   ttl     = 300
   records = [aws_apprunner_custom_domain_association.app.dns_target]
 }
+
+# ── Inbound email forwarding (ImprovMX) ────────────────────────────────────────
+# Free email forwarding so we have a real business-domain mailbox
+# (e.g. api@bomsmith.com → a personal inbox) without standing up a full
+# mail server. Useful for vendor/API signups that reject free-mail
+# (gmail/yahoo) addresses.
+#
+# DNS is only half the setup. The other half is in the ImprovMX dashboard
+# (https://improvmx.com, free): add the domain `bomsmith.com` and create
+# the alias api@bomsmith.com → <your inbox>. ImprovMX verifies ownership
+# via these records, so create the alias first, then apply this.
+#
+# mx1/mx2 hostnames and the SPF include are ImprovMX's stable, documented
+# values. The zone had zero MX/TXT records beforehand, so nothing is
+# being displaced.
+
+resource "aws_route53_record" "improvmx_mx" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.domain_name
+  type    = "MX"
+  ttl     = 300
+  records = [
+    "10 mx1.improvmx.com",
+    "20 mx2.improvmx.com",
+  ]
+}
+
+resource "aws_route53_record" "improvmx_spf" {
+  zone_id = data.aws_route53_zone.main.zone_id
+  name    = var.domain_name
+  type    = "TXT"
+  ttl     = 300
+  records = ["v=spf1 include:spf.improvmx.com ~all"]
+}
